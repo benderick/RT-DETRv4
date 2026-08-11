@@ -1,0 +1,579 @@
+\documentclass[lettersize,journal]{IEEEtran}
+\usepackage{amsmath,amsfonts}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{array}
+\usepackage[caption=false,font=footnotesize,labelfont=rm,textfont=rm]{subfig}
+%\usepackage{subcaption}
+\usepackage{textcomp}
+\usepackage{stfloats}
+\usepackage{url}
+\usepackage{verbatim}
+\usepackage{graphicx}
+\usepackage{cite}
+\usepackage{tikz}   % 正文矩形框
+\usepackage[breaklinks, colorlinks, linkcolor=blue, citecolor=blue, urlcolor=blue]{hyperref}
+% \usepackage{fontawesome5}
+\usepackage{simpleicons}
+\usepackage{pifont}
+\usepackage{orcidlink}
+\usepackage{listings}
+
+
+\input{tables.tex}
+\input{figures.tex}
+
+%\makeatletter
+%\algrenewcommand\ALG@beginalgorithmic{\small}  % 正文字号 small
+%\algrenewcommand\alglinenumber[1]{\scriptsize #1:} % 行号字号 scriptsize
+%\makeatother
+
+
+
+\begin{document}
+
+\title{Real-Time Oriented Object Detection Transformer in Remote Sensing Images}
+
+\author{
+Zeyu Ding\textsuperscript{~\orcidlink{0009-0005-9614-7131}}, 
+Yong Zhou\textsuperscript{~\orcidlink{0000-0001-6207-0299}}, 
+Jiaqi Zhao\textsuperscript{~\orcidlink{0000-0002-3564-5090}},~\IEEEmembership{Member,~IEEE}, 
+Wen-Liang Du\textsuperscript{~\orcidlink{0000-0002-9234-0912}}~\IEEEmembership{Member,~IEEE}, 
+Xixi Li~\IEEEmembership{Member,~IEEE}, \\
+Rui Yao\textsuperscript{~\orcidlink{0000-0003-2734-915X}},~\IEEEmembership{Member,~IEEE}, 
+and Abdulmotaleb El Saddik\textsuperscript{~\orcidlink{0000-0002-7690-8547}},~\IEEEmembership{Fellow,~IEEE}
+
+
+\thanks{Received 27 December 2025; revised 23 February 2026; accepted 3 March 2026.}
+
+\thanks{Zeyu Ding, Yong Zhou, Jiaqi Zhao, Wen-Liang Du, Xixi Li, and Rui Yao are with the School of Computer Science and Technology / School of Artificial Intelligence, China University of Mining and Technology, Xuzhou 221116, China, and with the Mine Digitization Engineering Research Center of the Ministry of Education, Xuzhou 221116, China, and also with the Jiangsu Provincial Industrial Technology Engineering Center for Intelligent Sensing and Emergency IoT in Underground Space, Xuzhou 221116, China (e-mails: \{dingzeyu, yzhou, jiaqizhao, wldu, xixil, ruiyao\}@cumt.edu.cn).}
+
+\thanks{Abdulmotaleb El Saddik is with the School of Electrical Engineering and Computer Science, University of Ottawa, Ottawa, ON K1N 6N5, Canada (e-mail: elsaddik@uottawa.ca).}
+
+\thanks{Digital Object Identifier 10.1109/TGRS.2026.3671683}
+}
+
+% The paper headers 
+\markboth{IEEE TRANSACTIONS ON GEOSCIENCE AND REMOTE SENSING}%
+{DING et al.: REAL-TIME ORIENTED OBJECT DETECTION TRANSFORMER IN REMOTE SENSING IMAGES}
+
+
+
+\maketitle
+
+\begin{abstract}
+Recent real-time detection transformers have gained popularity due to their simplicity and efficiency. However, these detectors do not explicitly model object rotation, especially in remote sensing imagery where objects appear at arbitrary angles, leading to challenges in angle representation, matching cost, and training stability.
+In this paper, we propose a real-time oriented object detection transformer, the first real-time end-to-end oriented object detector to the best of our knowledge, that addresses the above issues. 
+Specifically, angle distribution refinement is proposed to reformulate angle regression as an iterative refinement of probability distributions, thereby capturing the uncertainty of object rotation and providing a more fine-grained angle representation.
+Then, we incorporate a Chamfer distance cost into bipartite matching, measuring box distance via vertex sets, enabling more accurate geometric alignment and eliminating ambiguous matches.
+Moreover, we propose oriented contrastive denoising to stabilize training and analyze four noise modes. We observe that a ground truth can be assigned to different index queries across different decoder layers, and analyze this issue using the proposed instability metric.
+We design a series of model variants and experiments to validate the proposed method. Notably, our O$^2$-DFINE-L, O$^2$-RTDETR-R50 and O$^2$-DEIM-R50 achieve 77.73\%/78.45\%/80.15\% AP$_{50}$ on DOTA1.0 and 132/119/119 FPS on the \textcolor[HTML]{76B900}{\raisebox{-0.15\height}{\simpleicon{nvidia}}} 2080ti GPU. Code is available at {\textcolor[HTML]{181717}{\raisebox{-0.25\height}{\simpleicon{github}}}} \url{https://github.com/wokaikaixinxin/ai4rs}.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Oriented object detection, detection transformer, real-time detector, remote sensing. 
+\end{IEEEkeywords}
+
+\section{Introduction}
+
+\latency
+
+Oriented object detection~\cite{orientedrcnn} in remote sensing images aims to classify objects into categories and localize them using rotated boxes aligned with their arbitrary orientations. Remote sensing applications typically require real-time detection with low latency. Existing real-time oriented object detection methods are primarily based on CNN models, with many adopting the YOLO framework~\cite{rtmdet,ppyoloer,yoloms} due to its reasonable trade-off between speed and accuracy. These approaches typically extend standard YOLO detectors by adding angle prediction branches to support rotated outputs. However, these models rely on post-processing steps such as rotated Non-Maximum Suppression (NMS)~\cite{nms}, which increases latency and introduces additional parameters, as shown in \figurename~\ref{latency}. Furthermore, in oriented object detection, the rotated NMS process requires a rotated IoU threshold, and the results are influenced by this threshold since oriented boxes are sensitive to IoU variations.
+
+In recent years, end-to-end detection transformer (DETR) methods~\cite{detr} have gained wide attention in object detection due to their simple framework and the ability to remove hand-crafted components. 
+DETR methods have been developed for oriented object detection, tackling challenges such as oriented object representation~\cite{orienteddetr}, attention mechanism design~\cite{arsdetr}, query formulation~\cite{rqformer}, and label assignment~\cite{rhino}.
+However, the high computational cost often hinders their real-time performance, making them less suitable for real-time applications.
+
+
+RT-DETR~\cite{rtdetr} emerged as the first real-time end-to-end detection transformer, achieving both efficiency and accuracy through a hybrid design and query selection mechanism. Following this pioneering work, several improved real-time Transformer-based detectors have been developed~\cite{rtdetrv2,rtdetrv3}. More recently, D-FINE~\cite{dfine} refines the regression process by modeling boxes as fine-grained distributions, enabling more precise localization. Methods like DEIM~\cite{deim} accelerate convergence through improved matching strategies. 
+However, existing real-time detection transformers are primarily designed for horizontal object detection in natural scenes. They lack explicit support for oriented objects, which are common in remote sensing imagery.
+
+
+Objects often appear at arbitrary orientations in remote sensing images, introducing geometric rotation transformations that pose several key challenges for real-time end-to-end detection transformers.
+\ding{182} \textbf{\textit{Angle representation.}} Most detectors predict angles by regressing a radian value, treating rotation as a precise value modeled by a Dirac delta distribution~\cite{rtmdet}. This approach fails to capture the uncertainty in object rotation. Consequently, models rely on L1 or rotated IoU losses, which offer limited supervision for fine-grained angle adjustment. This makes optimization sensitive to minor angular errors and hinders convergence. While techniques such as DFL~\cite{ppyoloer} utilize distributions to represent uncertainty, they are still constrained by coarse localization and anchor dependency.
+\ding{183} \textbf{\textit{Matching cost.}} Conventional distance metrics often introduce geometric ambiguity during bipartite matching. For instance, L1 distance may assign a lower cost to a spatially distant prediction that happens to share the same orientation, while penalizing a well-aligned but slightly rotated box. Similarly, KL divergence~\cite{kld} fails to distinguish between square boxes with identical shape and center, and Hausdorff distance~\cite{rhino} is overly sensitive to outliers.
+\ding{184} \textbf{\textit{Training stability.}} We observe that a single ground-truth object can be matched to different index predicted queries across decoder layers during early training stages. The instability of bipartite graph matching causes inconsistent optimization goals. Hungarian matching exhibits unstable assignment due to the existence of blocking pairs~\cite{blockpair}. A slight change in the cost may cause a significant change in the matching result. 
+
+
+To address these issues, we propose a real-time end-to-end oriented object detection transformer for remote sensing images that introduces three key innovations for the challenges of angle representation, matching cost, and training stability. 
+\textit{\textbf{First}}, we design \textbf{Angle Distribution Refinement}, which replaces direct angle regression with an iterative refinement of probability distributions, enabling the model to capture angular uncertainty and perform progressively finer residual adjustments in a residual manner.
+\textit{\textbf{Second}}, we incorporate \textbf{Chamfer Distance Cost} into bipartite matching by measuring the distance between oriented boxes via their vertices, which alleviates ambiguous matches caused by traditional distance costs and ensures that only spatially and rotationally aligned predictions are favored.
+\textit{\textbf{Third}}, we introduce \textbf{Oriented Contrastive Denoising}, a training strategy that injects noise into oriented boxes to generate positive and negative query pairs across four modes. We propose an instability metric to verify that this mechanism stabilizes label assignment.
+We develop a family of detectors and perform extensive experiments on four datasets. Our O$^2$-DFINE-L, O$^2$-RTDETR-R50, and O$^2$-DEIM-R50 achieve 77.73\%/78.45\%/80.15\% AP$_{50}$ on DOTA1.0 and 132/119/119 FPS on the 2080ti GPU.
+
+
+
+The contributions of this work are summarized as follows:
+\begin{enumerate}
+\renewcommand{\labelenumi}{\arabic{enumi})}
+\item To model the uncertainty in object rotation angles, we introduce Angle Distribution Refinement, which provides a fine-grained representation and enables progressively finer adjustments.
+\item To alleviate ambiguous matches caused by suboptimal distance costs, we incorporate the Chamfer Distance Cost into bipartite matching, enabling more accurate geometric alignment.
+\item To mitigate training instability in label assignment, we propose Oriented Contrastive Denoising with four noise injection modes. We further introduce an instability metric to verify its effectiveness.
+\item As far as we know, our method is the first real-time oriented object detection transformer, with variants including O$^2$-RTDETR, O$^2$-DFINE, and O$^2$-DEIM. Experiments demonstrate that the method achieves competitive performance with real-time inference speed.
+\end{enumerate}
+
+
+\section{Related Work}
+
+
+\subsection{Oriented Object Detection in Remote Sensing}
+Oriented object detection in remote sensing imagery aims to localize objects with arbitrary orientations. Existing methods can be broadly categorized into CNN-based, transformer-based, and random-initialization approaches according to how object candidates are generated. 
+\underline{CNN-based methods} include both two-stage~\cite{orientedrcnn,redet} and single-stage~\cite{messdet,dcfl} detectors. Two-stage methods generate region proposals that are subsequently refined, while single-stage methods directly predict object classes and oriented bounding boxes from densely placed anchors in a single forward pass. 
+\underline{Transformer-based methods} formulate oriented object detection as a set prediction problem using a fixed number of learnable queries~\cite{orienteddetr,arsdetr}. These methods directly predict oriented bounding boxes in an end-to-end manner, eliminating the need for anchors or proposal generation.
+\underline{Random-initialization methods} represent object candidates using randomly initialized primitives. These methods refine Gaussians into oriented boxes through Gaussian splatting~\cite{gsdet} or denoising diffusion~\cite{rediffdet}, and typically support a dynamic number of candidates and enable flexible inference.
+
+In contrast to existing CNN-based~\cite{msc,friou,wsod,10473137,guo2025multi} and random-initialization methods, our approach is fully end-to-end and avoids handcrafted post-processing such as non-maximum suppression. Compared with prior transformer-based detectors, our method further achieves real-time inference.
+
+
+
+\subsection{Detection Transformer in Oriented Object Detection}
+
+Existing detection transformers for oriented object detection can be broadly categorized by their core technical designs, including oriented object representation, rotation-aware attention, query formulation, and label assignment.
+Some works focus on \underline{oriented object representations} to mitigate angle ambiguity, such as point-based~\cite{orienteddetr} or oriented-box-based~\cite{ro2detr} query formulations, or decoupled angle modeling to reduce error propagation~\cite{orienteddino}. 
+Another line of research enhances \underline{attention mechanisms} with rotation awareness, for example, by rotating sampling locations~\cite{arsdetr}, introducing rotation-equivariant feature extraction~\cite{ro2detr}, or designing geometry-aware self- and cross-attention modules~\cite{orientedformer} to better capture oriented object structures.
+\underline{Query design} has also been explored to improve efficiency and suppress redundancy, including representing objects as point sets, generating selective distinct queries~\cite{rqformer}, and encouraging query diversity during training~\cite{orienteddino}.
+\underline{Label assignment strategies} are further adapted to aerial imagery, addressing unbalanced object distributions and redundant predictions through dynamic matching schemes~\cite{ro2detr}, geometry-aware matching costs~\cite{rhino}, or high-quality sample selection~\cite{emo2detr}.
+
+In contrast to these methods, our method represents the first real-time detection transformer for oriented object detection.
+
+\differentConfThre
+\NMSAP
+
+
+
+\subsection{Real-time Object Detectors}
+Real-time object detection has remained a key focus area within computer vision. Among the most influential frameworks in this area is the \underline{YOLO series}~\cite{yolov1}. Early YOLO models established the one-stage detection paradigm for fast inference, while later variants improved the speed–accuracy trade-off through enhanced multi-scale feature representations~\cite{yolov6}, decoupled detection heads~\cite{yolov8}, efficient backbones~\cite{yolov9}, and attention modules~\cite{yolov12}.
+
+Despite their efficiency, most YOLO-based detectors rely on NMS to remove duplicate predictions, which introduces additional latency and may lead to unstable results in dense scenes, such as remote sensing imagery. This limitation has motivated the development of end-to-end real-time detectors. RT-DETR~\cite{rtdetr} emerged as the first end-to-end \underline{real-time detection transformer} by introducing efficient encoder design and query selection. Subsequent works further improved localization accuracy and training efficiency by refining regression representations and enhancing matching-based supervision~\cite{dfine,deim}.
+
+
+Unlike existing real-time detection transformers, our method explicitly supports oriented object detection and robustly handles arbitrarily rotated objects commonly found in remote sensing imagery.
+
+
+
+
+\section{Analysis of rotated NMS for Detectors}
+
+
+\NMSExeTime
+
+
+Rotated Non-Maximum Suppression (NMS) is a post-processing algorithm designed to remove overlapping oriented boxes in non-end-to-end oriented object detectors. Rotated NMS requires two thresholds: a rotated IoU threshold and a confidence threshold. It first filters out predicted oriented boxes whose scores fall below the confidence threshold. Then, whenever the rotated IoU between two oriented boxes exceeds the rotated IoU threshold, the box with the lower score is discarded. This process continues until all boxes have been processed. The latency of rotated NMS is influenced by the two thresholds and the number of oriented boxes. 
+
+
+To analyze these effects, we count how many oriented boxes remain after filtering the predictions with different confidence thresholds (0.005 to 0.25) on the DOTA-v1.0 \texttt{trainval} set. We adopt anchor-free detectors, RTMDet-s~\cite{rtmdet} and YOLOX-s~\cite{yolox}, and the anchor-based YOLOv5-s~\cite{yolov5}. The results in \figurename~\ref{differentConfThre} show that rotated NMS is highly sensitive to the confidence threshold. As the confidence threshold increases, more oriented boxes are removed, leaving fewer candidates for the rotated IoU computation. In addition, we evaluate the AP$_{50}$ of RTMDet-s on the DOTA-v1.0 \texttt{test} set under different thresholds, as shown in Table~\ref{NMSAP}. The results show that the detection accuracy is influenced by both thresholds.
+
+
+Furthermore, we test the execution time of the rotated NMS operation under different numbers of non-overlapping oriented boxes, with a single class and all scores set to 100\%, as shown in \figurename~\ref{NMSExeTime}. The test is conducted on an \textcolor[HTML]{76B900}{\raisebox{-0.15\height}{\simpleicon{nvidia}}} 2080ti GPU using TensorRT FP16 with NVIDIA \texttt{trtexec} and \href{https://developer.nvidia.com/nsight-systems}{\textcolor{black}{Nsight Systems}}. The rotated NMS operation adopted here is the \texttt{RotatedNMSPlugin} \href{https://github.com/laugh12321/TensorRT-YOLO}{\textcolor[HTML]{181717}{\raisebox{-0.25\height}{\simpleicon{github}}}}, which is provided as a TensorRT static plugin. Its key kernels include \texttt{RotatedNMS}, \texttt{RotatedNMSFilter}, and \texttt{RadixSort}.  As the number of oriented boxes increases, the execution time of \texttt{RotatedNMS} grows significantly, whereas the overhead of the other two kernels remains negligible.
+
+
+
+\section{Method}
+
+\angleDistribution
+
+\subsection{Overview}
+
+% Our model is composed of a backbone, a transformer encoder, a decoder, and a prediction head. 
+
+Our approach is centered on addressing the challenges caused by rotation transformations, including angle representation (Sec.~\ref{sec:ADR}), matching cost (Sec.~\ref{sec:chamfer}), and training stability (Sec.~\ref{sec:denoising}). The training procedure is shown in Algorithm \ref{algo}. The model architecture is introduced below.
+
+\textit{Oriented boxes definition.} We represent an oriented bounding box as $(c_x, c_y, w, h, \theta)$, where $(c_x, c_y)$ denotes the box center, $w$ and $h$ are the width and height, and $\theta \in [0, \pi)$ represents the rotation angle relative to the x-axis.
+
+\textit{Backbone with channel mapper.} The O$^2$-RTDETR and O$^2$-DEIM adopts the ResNet~\cite{resnetd} series as the backbone, while O$^2$-DFINE employs the HGNetv2~\cite{paddlepaddle} series. Both backbones output three feature maps with downsampling ratios of 8$\times$, 16$\times$, and 32$\times$ relative to the input image. To ensure consistent feature dimensions for the encoder, each feature map is projected to 256 channels using a $1\times1$ convolution layer.
+
+
+
+\textit{Transformer encoder with query selection.} The encoder follows the hybrid encoder~\cite{rtdetr}, decoupling intra-scale interaction and cross-scale fusion. An attention-based module performs self-attention on the highest-level feature map, while a CNN-based module fuses features across scales efficiently. The uncertainty-minimal query selection~\cite{rtdetr} is employed to select the top-$K$ (default 300) queries, and the corresponding oriented boxes are used as references for the decoder.
+
+\textit{Transformer decoder.} The decoder consists of multiple stacked decoder layers, each containing self-attention, cross-attention, and feed-forward networks. In cross-attention, the sampling points are rotated around the box center according to the predicted box angle. 
+%In D-FINE~\cite{dfine}, the cross-attention performs uneven sampling across multiple feature scales. We extend this idea by rotating these unevenly sampled points according to the box orientation, forming the cross-attention used in O$^2$-DFINE.
+
+
+\begin{algorithm}[h]
+    \caption{Training procedure pseudocode.}
+   \label{algo}
+\definecolor{codeblue}{rgb}{0.29, 0.53, 0.91}
+\lstset{
+   basicstyle=\footnotesize\ttfamily,        % 适中的字体
+  commentstyle=\color{codeblue}\itshape,     % 注释为斜体并着色
+  keywordstyle=\bfseries,                    % 关键词加粗
+  stringstyle=\color{orange},                % 字符串用橙色
+  breaklines=true,                           % 自动换行
+  backgroundcolor=\color{white},             % 背景色
+  showstringspaces=false,                    % 不显示字符串中的空格
+  aboveskip=0pt,                             % 减少上边距
+  belowskip=0pt,                             % 减少下边距
+}
+\begin{lstlisting}[language=python, mathescape, breaklines=true]
+# adr - head with angle distribution refinement
+# ocd - oriented contrastive denoising
+# cdc - matching with Chamfer distance cost
+prediction = adr(transformer(backbone(image)))
+noise = ocd(gt) # gt - ground truth
+pairs = cdc({prediction, gt}, {noise, gt})
+loss(pairs)
+\end{lstlisting}
+\end{algorithm}
+
+
+
+
+\subsection{Angle Distribution Refinement}\label{sec:ADR}
+
+Angle Distribution Refinement (ADR) iteratively optimizes the fine-grained distributions of the rotation angle $\theta$ and the parameters $(c_x,c_y,w,h)$ across decoder layers, as shown in \figurename~\ref{angleDistribution}. Instead of directly modeling the angle $\theta$ in the angular space, ADR decomposes the prediction process into two stages: (1) refining the external rectangle of an oriented box, and (2) adjusting the vertex offsets along its edges to derive the final oriented box. This indirect formulation ensures that both the angle $\theta$ and the parameters $(c_x, c_y, w, h)$ are optimized within a unified metric space, thus avoiding inconsistency.
+The first decoder layer predicts initial oriented boxes through a traditional oriented box regression head and initial distributions through an O$^2$-DFINE head. Each oriented box is associated with six distributions: four for the edges of its external rectangle and two for the offsets along these edges. The subsequent layers iteratively refine both types of distributions in a residual manner. The refined distributions are used to adjust the external rectangle and its edge offsets, jointly refining the angle $\theta$ and the parameters $(c_x, c_y, w, h)$. 
+
+\textit{Vertex offset.}
+The initial vertex offsets $\mathcal{D}_o^0 = (\epsilon, \eta)$ are defined such that $\epsilon$ measures the distance from the top vertex of the oriented box to the top-right corner of its external rectangle, while $\eta$ measures the distance from the rightmost vertex to the bottom-right corner.
+The vertex offsets $(\epsilon, \eta)$ characterize how the oriented box is positioned within its external rectangle.
+For the $l$-th decoder layer, the vertex offsets $\mathcal{D}_o^l=(\epsilon^l,\eta^l)$ are updated in a residual manner as:
+\begin{equation}
+\mathcal{D}_o^l = \mathcal{D}_o^0 + (W_r, H_r) \cdot \sum_{n=0}^{N} \mathcal{A}(n)\mathcal{P}_o^{l}(n), 
+\end{equation}
+where the decoder layer $l\in\{1,2,...,L\}$. $\mathcal{P}_o^l(n)=\{\mathcal{P}_\epsilon^l(n),\mathcal{P}_\eta^l(n)\}$ denotes two distributions corresponding to vertex offset. Each distribution predicts the likelihood of candidate offset values. These candidate offsets are discretized into $N+1$ bins indexed by $n$, with each bin representing one possible offset value. The weighting function $\mathcal{A}(n)$ maps each bin index $n$ to its corresponding offset.
+
+\textit{External rectangle.} Let $r^0 = (c_x, c_y, W_r, H_r)$ denote the initial external rectangle converted from the initial oriented boxes, where $(c_x, c_y)$ is the center and $(W_r, H_r)$ represent the width and height of the external rectangle. Let $\mathcal{D}_r^0 = (\alpha,\beta,\gamma,\delta)$ denote the distances from the center to the left, top, right, and bottom edges of the external rectangle, respectively. 
+For the $l$-th decoder layer, the refined edge distances $\mathcal{D}_r^l = (\alpha^l, \beta^l, \gamma^l, \delta^l)$ are updated in a residual manner as:
+\begin{equation}
+\mathcal{D}_r^l = \mathcal{D}_r^0 + (W_r, H_r, W_r, H_r) \cdot \sum_{n=0}^{N} \mathcal{A}(n)\mathcal{P}_r^{l}(n), 
+\end{equation}
+where $\mathcal{P}_r^l(n)=\{\mathcal{P}_\alpha^l(n),\mathcal{P}_\beta^l(n),\mathcal{P}_\gamma^l(n),\mathcal{P}_\delta^l(n)\}$ denotes four distributions corresponding to the edges of the external rectangle.
+
+\charmferDistance
+
+
+
+\textit{Refined probability distribution.}
+ADR refines the probability distributions in a residual manner, formulated as:
+\begin{equation}
+\mathcal{P}^l_\cdot(n)=\text{Softmax}(\text{logits}^{l-1}(n) + \Delta \text{logits}^l(n)).
+\end{equation}
+The $\text{logits}^{l-1}(n)$ represent the confidence of the previous decoder layer in each discretized bin of the distance values for the vertex offsets and external rectangle.
+The current decoder layer outputs residual logits $\Delta \text{logits}^l(n)$, and the updated logits are computed as $\text{logits}^l(n)=\text{logits}^{l-1}(n)+\Delta \text{logits}^l(n)$.
+These updated logits are then transformed into refined probability distributions via softmax normalization.
+
+
+\textit{Weighting function.}
+The weighting function is defined as:
+\begin{equation}\label{weight_fun}
+\mathcal{A}(n) = \operatorname{sgn}(n-\frac{N}{2})\cdot 
+\begin{cases} 
+2a, \, n\in\{0,N\},\\
+c\Big((1+\frac{a}{c})^{\frac{2\left| n-\frac{N}{2} \right|}{N-2}}-1\Big), \, \text{other}.
+\end{cases} 
+\end{equation}
+where $n\in\{0,1,\dots,N\}$ and $\operatorname{sgn}(\cdot)$ denotes the sign function. 
+$a$ and $c$ are hyper-parameters that control the curvature and bounds of the weighting function. 
+When the predicted box is close to the target, the smooth variation of $\mathcal{A}(n)$ enables fine-grained adjustments. 
+In contrast, for inaccurate predictions, the sharp changes near the boundaries of $\mathcal{A}(n)$ allow larger corrective updates.
+
+
+\textit{Loss.}
+The Fine-Grained Localization loss~\cite{dfine} is adopted and applied to both vertex offsets and external rectangle.
+
+
+
+
+
+
+\subsection{Chamfer distance cost for bipartite matching}\label{sec:chamfer}
+
+In detection transformers, label assignment is formulated as a bipartite matching problem solved by the Hungarian algorithm. The matching cost typically consists of three terms: distance, IoU, and classification costs. The distance cost measures the spatial alignment between predictions and ground truths. This section focuses on the distance cost, analyzing the limitations of commonly used formulations and introducing the Chamfer distance cost as a more robust and geometry-consistent alternative, as shown in \figurename~\ref{charmferDistance}.
+
+\textit{Chamfer distance.}
+Chamfer distance is a metric used to measure the similarity between two point sets by calculating the sum of the squared distances from each point in one cloud to its nearest neighbor in the other cloud. Given two point sets $\mathcal{S}$ and $\mathcal{T}$, it is defined as:
+\begin{equation}\label{eq:chamferdistance}
+\mathcal{D}_{\text{cf}}(\mathcal{S}, \mathcal{T}) =
+\frac{1}{|\mathcal{S}|}\sum_{s \in \mathcal{S}} \min_{t \in \mathcal{T}} \|s - t\|_2^2 +
+\frac{1}{|\mathcal{T}|}\sum_{t \in \mathcal{T}} \min_{s \in \mathcal{S}} \|t - s\|_2^2.
+\end{equation}
+The first term measures the distance from each point in set $\mathcal{S}$ to its nearest neighbor in $\mathcal{T}$, while the second term performs the reverse, ensuring symmetry by measuring distances from $\mathcal{T}$ to $\mathcal{S}$.
+
+
+
+\contrastiveDenoise
+
+
+
+\textit{Chamfer distance cost.}
+Both the predicted and ground-truth oriented boxes are converted into point sets composed of their four corner vertices, denoted as $\mathcal{S}_{pred}$ and $\mathcal{S}_{gt}$. 
+Given an oriented box parameterized by $(c_x, c_y, w, h, \theta)$, its four vertices $\{v_1,v_2,v_3,v_4\}$ can be derived as:
+\begin{equation}\label{eq:rbox2vertex}
+v_i = (c_x, c_y) \pm \frac{w}{2}(\cos\theta, \sin\theta) \pm \frac{h}{2}(-\sin\theta, \cos\theta),
+\end{equation}
+where $i\in\{1,2,3,4\}$. The ordering of vertices is not constrained, as the Chamfer distance is permutation-invariant with respect to point correspondence. The Chamfer distance cost between the two sets is computed as:
+\begin{equation}
+\mathcal{C}_{\text{cf}} = \mathcal{D}_{\text{cf}}(\mathcal{S}_{pred}, \mathcal{S}_{gt}).
+\end{equation}
+During bipartite matching, this Chamfer distance cost serves as the distance term in the overall matching cost. The point-based Chamfer distance cost preserves geometric alignment and mitigates matching ambiguity. The following discusses the limitations of conventional cost formulations and the advantages of our proposed method.
+
+
+\textit{Geometric Ambiguity in L1 distance cost.}
+The L1 distance measures absolute differences in center coordinates, widths, heights, and angles. Given a ground-truth box $(c_x, c_y, w, h, \theta)$ and a predicted one $(c_x+\Delta c_x,c_y+\Delta c_y, w+\Delta w, h+\Delta h, \theta+\Delta \theta)$, the L1 distance between them is defined as:
+\begin{equation}
+\mathcal{D}_\text{L1}=\left |\Delta c_x \right|+ \left |\Delta c_y \right|+ \left | \Delta w \right|+ \left | \Delta h \right|+ \left | \Delta \theta \right|.
+\end{equation}
+\figurename~\ref{charmferDistance}(c) illustrates the geometric ambiguity of the L1 distance. A predicted box $(c_x+\Delta c_x, c_y+\Delta c_y, w, h, \theta)$ that is far away from the ground truth and has zero IoU can still obtain a smaller L1 cost than another prediction $(c_x, c_y, w, h, \theta+\Delta \theta)$ that is perfectly aligned in position and size but differs only by a rotation. The geometric relationships are expressed as:
+\begin{gather}
+\sqrt{\Delta c_x^2+\Delta c_y^2} \cos(\theta+\arctan \frac{\Delta c_x}{\Delta c_y})>h, \label{l1distance1}\\
+\left | \Delta\theta \right | >\left |  \Delta c_x\right | +\left | \Delta c_y \right |. \label{l1distance2}
+\end{gather}
+When both Eq.~\ref{l1distance1} and Eq.~\ref{l1distance2} are satisfied, the distant prediction $(c_x+\Delta c_x, c_y+\Delta c_y, w, h, \theta)$ obtains a lower L1 cost than the prediction that is rotated by $\Delta \theta$. In contrast, our Chamfer distance assigns a higher cost to the distant prediction and avoids this geometric ambiguity.
+
+
+\textit{Square problem in KL divergence cost.}
+The Kullback-Leibler divergence treats oriented boxes as probability distributions and measures the distance between them~\cite{kld}, as shown in \figurename~\ref{charmferDistance}(b). For a square box $(c_x, c_y, w, w, \theta)$, the means of its distribution is $\boldsymbol{\mu}=(c_x,c_y)^\top$ and the variance matrix is $\boldsymbol{\Sigma} = \bigl( \begin{smallmatrix} w^2 / 4 & 0 \\ 0 & w^2 / 4 \end{smallmatrix} \bigr)$. Two square boxes that differ only in angle have the same mean $\boldsymbol{\mu}$ and variance $\boldsymbol{\Sigma}$, and the KL divergence between them is computed as follows:
+\begin{equation}
+\mathcal{D}_{\text{KL}} = \frac{1}{2}(\boldsymbol{\mu}-\boldsymbol{\mu})^\top\boldsymbol{\Sigma}^{-1}(\boldsymbol{\mu}-\boldsymbol{\mu})+
+\frac{1}{2}\mathrm{tr}(\boldsymbol{\Sigma}^{-1}\boldsymbol{\Sigma})+
+\frac{1}{2}\ln\frac{\left|\boldsymbol{\Sigma}\right|}{\left|\boldsymbol{\Sigma}\right|}-1.
+\end{equation}
+When two rotated square boxes differ only in their angles, their KL divergence becomes 0, making it unable to distinguish between them. In contrast, the Chamfer distance can still provide a meaningful measure of their difference.
+
+
+
+\textit{Outlier sensitivity in Hausdorff distance cost.}
+The Hausdorff distance measures how far two point sets are from each other by focusing on their worst-case deviation~\cite{rhino}. Given two point sets $\mathcal{S}$ and $\mathcal{T}$, the Hausdorff distance is defined as the maximum distance from a point in one set to its nearest neighbor in the other set:
+\begin{equation}
+\mathcal{D}_{\text{Haus}} = \max \left \{ \max_{s\in\mathcal{S}} \min_{t\in\mathcal{T}}\left \| s-t \right \|_2, \max_{t\in\mathcal{T}} \min_{s\in\mathcal{S}}\left \| t-s \right \|_2 \right \}.
+\end{equation}
+The first term measures the greatest among all the smallest distances from points in $\mathcal{S}$ to points in $\mathcal{T}$, while the second term measures the reverse. By taking the maximum of these two, the Hausdorff distance captures the largest mismatch between the two sets. \figurename~\ref{charmferDistance}(d) illustrates a case where the Hausdorff distances $\tilde{h}$ ($\tilde{h}<\frac{h}{2}$) between the predicted and ground-truth boxes are all the same. In contrast, the Chamfer distance is less sensitive to outliers.
+
+
+\subsection{Oriented Contrastive Denoising}\label{sec:denoising}
+
+The Oriented Contrastive Denoising (OCD) is specifically designed for oriented boxes as shown in \figurename~\ref{contrastiveDenoise}. OCD generates paired positive and negative queries with noise for each ground-truth oriented box, where the positive queries receive slight noise, and the negative ones receive larger noise. Through this denoising process, the decoder learns to recover accurate box geometry and stabilize training. We explore four noise modes across different dimensions of the oriented boxes. The instability metric is proposed to verify effectiveness.
+
+
+
+
+
+\textit{Box noise.}
+In this setting, the angle $\theta$ is kept unchanged. Instead of noise addition into $(c_x,c_y,w,h)$ directly, we first convert the oriented box into $(x_1,y_1,x_2,y_2)$, where $x_1,x_2 = c_x \pm w/2,$ and $ y_1,y_2 = c_y \pm h/2$. Noise is then added to each coordinate of the vertices, yielding $(x_1+\Delta x_1,y_1+\Delta y_1)$ and $(x_2+\Delta x_2,y_2+\Delta y_2)$. The noise magnitude is controlled by two hyperparameters $\lambda_1$ and $\lambda_2$ ($\lambda_1 < \lambda_2$). For the positive query, we apply small noise to each vertex. For the vertex $(x_1,y_1)$, the noise ranges are defined as:
+\begin{equation}
+  \Delta x_{1}^{\text{pos}} \in [-\frac{\lambda_1 w}{2},\frac{\lambda_1 w}{2}), \quad
+  \Delta y_{1}^{\text{pos}} \in [-\frac{\lambda_1 h}{2},\frac{\lambda_1 h}{2}),
+\end{equation}
+and the same formulation is applied symmetrically to $(x_2,y_2)$. This produces a slightly noised oriented box whose shape and location remain close to the ground truth. In contrast, the negative query receives larger noise:
+\begin{equation}
+  \Delta x_{1}^{\text{neg}} \in 
+  [-\frac{\lambda_2 w}{2}, -\frac{\lambda_1 w}{2}) \cup
+  [\frac{\lambda_1 w}{2}, \frac{\lambda_2 w}{2}),
+\end{equation}
+and similarly for $\Delta y_{1}^{\text{neg}}, \Delta x_{2}^{\text{neg}}, \Delta y_{2}^{\text{neg}}$. These larger vertex shifts produce a significantly distorted box that differs noticeably from the ground truth.
+
+
+\instability
+
+
+\textit{Angle noise.} 
+In this setting, noise is only injected into the angle $\theta$ while the parameters $(c_x,c_y,w,h)$ remain unchanged. For each ground-truth oriented box, we generate paired positive and negative queries by injecting angular noise, controlled by two hyperparameters $\lambda_3$ and $\lambda_4$ ($\lambda_3 < \lambda_4$). Specifically, the positive query receives a small random noise:
+\begin{equation}
+\Delta\theta^{\text{pos}}\in[-\frac{\lambda_3\theta}{18}, \frac{\lambda_3\theta}{18}),
+\end{equation}
+which produces an oriented box whose orientation remains close to the ground truth. In contrast, the negative query is noised with a larger angular deviation:
+\begin{equation}
+\Delta\theta^{\text{neg}}\in[-\frac{\lambda_4\theta}{18}, \frac{\lambda_3\theta}{18})\cup[\frac{\lambda_3\theta}{18}, \frac{\lambda_4\theta}{18}),
+\end{equation}
+resulting in a clearly misaligned orientation.
+
+\textit{Geometric noise.}
+The geometric noise setting combines the box noise and angle noise, jointly applying noise to both the box geometry and the rotation angle. Specifically, the parameters $(c_x,c_y,w,h)$ are first converted into $(x_1,y_1,x_2,y_2)$, and geometric noise is added to the vertices following the box noise strategy. At the same time, the angle $\theta$ is perturbed following the angle noise formulation.
+
+\textit{Probability noise.}
+Inspired by ReDiffDet~\cite{rediffdet}, each oriented box is represented as a Gaussian distribution $\mathcal{N}(\mathbf{0}, \boldsymbol{\Sigma})$, where the box center is placed at the origin, and the covariance is defined as $\boldsymbol{\Sigma} = \mathbf{R} \mathbf{\Lambda}
+ \mathbf{R}^\top$, where $\mathbf{R}=\bigl( \begin{smallmatrix} \cos \theta & -\sin \theta \\ \sin & \cos \theta \end{smallmatrix} \bigr)$ and $\mathbf{\Lambda} = \operatorname{diag}((\frac{w}{max(w,h)})^2/4, (\frac{h}{max(w,h)})^2/4)$. A standard Gaussian noise $\mathcal{N}(\mathbf{0},\mathbf{I})$ is added to the distribution. Using the additive property of Gaussian variables, we obtain:
+\begin{equation}
+  \sqrt{1-\lambda}\mathcal{N}(\mathbf{0}, \boldsymbol{\Sigma}) + \sqrt{\lambda} \mathcal{N}(\mathbf{0}, \mathbf{I}) = \mathcal{N}(\mathbf{0}, (1-\lambda)\boldsymbol{\Sigma}+\lambda\mathbf{I}).
+\end{equation}
+Two coefficients $\lambda_5$ and $\lambda_6$ ($\lambda_5 < \lambda_6$) control the perturbation strength for positive and negative queries. The covariance of a positive query is sampled from $\boldsymbol{\Sigma}^{pos}\in[\boldsymbol{\Sigma},(1-\lambda_5)\boldsymbol{\Sigma}+\lambda_5\mathbf{I})$, while negative queries use $\boldsymbol{\Sigma}^{neg}\in[(1-\lambda_5)\boldsymbol{\Sigma}+\lambda_5\mathbf{I},(1-\lambda_6)\boldsymbol{\Sigma}+\lambda_6\mathbf{I})$. Finally, the noised oriented box is reconstructed from the perturbed covariance via eigenvalue decomposition.
+
+
+
+
+\textit{Effectiveness.}
+\figurename~\ref{contrastiveDenoise}(e) shows that a single ground-truth object can be matched to different index queries across decoder layers.
+For a training image, we denote $M$ ground truth objects as $\{\text{gt}_0,\text{gt}_1, \dots ,\text{gt}_{M-1}\}$, and predicted objects from $l$-th decoder layer as $\{\text{query}^l_0,\text{query}^l_1,\dots,\text{query}^l_{K-1}\}$. After bipartite matching, we compute an index vector $\mathbf{G}^l=\{G^l_0,G^l_1,\dots,G^l_{M-1}\}$ to store the matching result of $l$-th layer as follows:
+\begin{equation}
+    G^l_m = k, \quad \text{if } \text{gt}_m \text{ matches } \text{query}^l_k.
+\end{equation}
+We define the instability for one training image as the difference among $\{\mathbf{G}^0,\mathbf{G}^1,\dots,\mathbf{G}^{L-1}\}$, which is calculated as:
+\begin{equation}
+  IS = (\sum_{m=0}^{M-1} G^0_m \oplus G^1_m \dots \oplus G^{L-1}_m)/M,
+\end{equation}
+where $\oplus$ is Exclusive OR. If the matching query indices change across layers, $IS$ will count them. \figurename~\ref{instability} shows a comparison of instability between rotated Deformable DETR and O$^2$-DFINE-L with different noise modes. We conduct this evaluation on the DOTA-v1.0 \texttt{trainval} set during training 1-12 epochs. The Oriented Contrastive Denoising effectively alleviates the instability of matching. 
+
+\TableExpSetting
+
+\section{Experiments}
+\subsection{Datasets}
+We conduct extensive experiments on four datasets DOTA-v1.0~\cite{dotav1.0}, DOTA-v1.5, DIOR-R~\cite{dior}, FAIR1M-v1.0~\cite{fair1m}.
+DOTA-v1.0~\cite{dotav1.0} contains 1,869 images in the \texttt{trainval} set and 937 images in the \texttt{test} set, with 188,282 instances annotated across 15 common object categories. DOTA-v1.5 uses the same images and splits as DOTA-v1.0 but includes more small objects and a new class, resulting in 16 categories and 403,318 instances.
+The DIOR-R~\cite{dior} dataset comprises 11,725 images in the \texttt{trainval} set and 11,738 in the \texttt{test} set, covering 20 object categories and 192,512 annotated instances.
+The FAIR1M-v1.0~\cite{fair1m} dataset contains 15,266 high-resolution remote sensing images, encompasses 37 fine-grained object categories organized under 5 coarse categories, and provides over 1.02 million annotated instances.
+
+\DOTAOneResults
+
+\subsection{Implementation Details and Evaluation Metrics}
+
+\textit{Implementation details.}
+We conduct all the experiments on two \textcolor[HTML]{76B900}{\raisebox{-0.15\height}{\simpleicon{nvidia}}} 2080ti with a batch of 8 (4 images per GPU). Models are constructed based on AI4RS with Pytorch \textcolor[HTML]{EE4C2C}{\raisebox{-0.15\height}{\simpleicon{pytorch}}}. We optimize models with the AdamW optimizer. O$^2$-RTDETR and O$^2$-DEIM employ KLD loss $\mathcal{L}_{kld}$~\cite{kld}, focal loss $\mathcal{L}_{focal}$~\cite{deim}, and L1 loss $\mathcal{L}_{L1}$, while O$^2$-DFINE further incorporates an additional Fine-Grained Localization (FGL) loss $\mathcal{L}_{fgl}$~\cite{dfine}. The weights of losses are $\lambda_{kld}=2.0$, $\lambda_{cls}=1.0$, $\lambda_{L1}=5.0$, and $\lambda_{fgl}=0.15$ respectively. Overall loss is calculated as $\lambda_{kld}\mathcal{L}_{kld}+\lambda_{cls}\mathcal{L}_{focal}+\lambda_{L1}\mathcal{L}_{L1}+\lambda_{fgl}\mathcal{L}_{fgl}$.  The distillation loss is not used. The weights of cost are $\xi_{kld}=2.0$, $\xi_{cls}=2.0$, and $\xi_{cf}=5.0$ for KLD cost $\mathcal{C}_{kld}$, focal cost $\mathcal{C}_{focal}$, and Chamfer distance cost $\mathcal{C}_{cf}$. Overall cost is calculated as $\xi_{kld}\mathcal{C}_{kld}+\xi_{cls}\mathcal{C}_{focal}+\xi_{cf}\mathcal{C}_{cf}$. Details of experiments are displayed in Table~\ref{expsetting}.
+
+For experiments on the DOTA and FAIR1M, images are cropped into 1024$\times$1024 patches with an overlap of 200. For multi-scale training on DOTA-v1.0, each image is first resized to three scales (0.5, 1.0, and 1.5) and then cropped following single-scale training. For DIOR-R, images are used at the original fixed size of 800$\times$800. For DOTA and FAIR1M, we submit test predictions to their official evaluation servers to obtain the final performance. DOTA uses both random flips and random rotations for data augmentation, while DIOR-R and FAIR1M apply only random flips.
+
+
+\textit{Evaluation metrics.}
+Average Precision (AP) evaluates detection accuracy by integrating the precision–recall curve over different confidence thresholds. The parameter count measures the number of learnable weights in the model. FLOPs represent the total number of floating-point operations required for a single forward pass. FPS reflects the inference speed by reporting how many images are processed per second. Latency is the time required to process one image, and it is inversely related to FPS.
+
+\subsection{Comparisons with modern oriented object detector}
+
+\DIORRResults
+
+\TableDOTAVonefiveResult
+
+
+
+\textit{Results on DOTA-v1.0.}
+Table \ref{DOTA-1.0-result} summarizes the experimental results on the DOTA-v1.0. O$^2$-DFINE-s / m / l achieve AP$_{50}$ of 76.14\%, 77.61\%, and 77.73\%, respectively, consistently outperforming the corresponding DFINE-R baselines. Similarly, O$^2$-RTDETR with R18 / R34 / R50 backbones attains AP$_{50}$ of 77.31\%, 78.13\%, and 78.45\%, respectively, surpassing the RTDETR-R models. Furthermore, under multi-scale training and testing, O$^2$-DEIM-R18 / R34 / R50 achieve AP$_{50}$ of 79.49\%, 80.04\%, and 80.15\%, respectively. The compared methods use the same image preprocessing as this chapter. These results demonstrate that our method is highly competitive with both modern non-end-to-end real-time and non-real-time oriented object detectors.
+
+
+\textit{Comparison of FPS, Parameters, FLOPs and Accuracy.}
+Table \ref{DOTA-1.0-result} shows the comparison in terms of FPS, parameters, FLOPs, and accuracy. All FLOPs are computed with a 1024$\times$1024 input, and FPS is measured on an NVIDIA \textcolor[HTML]{76B900}{\raisebox{-0.15\height}{\simpleicon{nvidia}}} 2080ti using TensorRT FP16 under the same resolution. O$^2$-DFINE-s reaches 297 FPS with only 10M parameters and 60G FLOPs, while the larger O$^2$-DFINE-m/l variants run at 176/132 FPS with 19M/31M parameters and 142G/229G FLOPs. O$^2$-RTDETR with ResNet-18/34/50 backbones achieves 233/174/119 FPS, using 20M/31M/42M parameters and 147G/228G/339G FLOPs, respectively. The O$^2$-DEIM retains the same FPS, parameter count, and FLOPs as its baseline. Importantly, our approach introduces no additional parameters, latency, or FLOPs, as it focuses on representation and optimization. Our approach is competitive with existing real-time detectors in both efficiency and accuracy.
+
+\TableFAIRResult
+
+\textit{Results on DIOR-R.}
+The DIOR-R results are summarized in Table \ref{DIOR-R-result}. Our method achieves consistently strong performance across all model variants. O$^2$-DFINE-s attains 67.05\% AP$_{50}$, while the larger O$^2$-DFINE-m further improves the score to 69.86\% AP$_{50}$. For the RTDETR family, O$^2$-RTDETR-R34 obtains 68.67\% AP$_{50}$, and the stronger O$^2$-RTDETR-R50 reaches 72.26\% AP$_{50}$, outperforming all existing oriented DETR-based and two-stage detectors listed in the comparison. These results demonstrate that our oriented modeling brings consistent gains across backbones and model scales.
+% and achieves state-of-the-art performance on DIOR-R.
+
+\textit{Results on DOTA-v1.5.}
+As shown in Table \ref{DOTA-1.5-result}, our proposed models achieve competitive performance on the DOTA-v1.5 dataset. Specifically, O$^2$-DFINE-s attains 70.22\% AP$_{50}$, while O$^2$-DFINE-m reaches 72.15\% AP$_{50}$. Furthermore, O$^2$-RTDETR-R34 achieves 71.91\% AP$_{50}$, and O$^2$-RTDETR-R50 attains 73.76\% AP$_{50}$, outperforming several existing approaches with particularly significant gains on small objects such as helicopters and container cranes.
+
+
+
+\textit{Results on FAIR1M-v1.0.}  
+Table~\ref{FAIR1M-1.0-result} presents the performance comparison on the FAIR1M-v1.0 dataset under single-scale training and testing settings. Our methods achieve strong results across the board: O$^2$-DFINE-s obtains an AP$_{50}$ of 39.77\%, and its larger variant O$^2$-DFINE-m further improves this to 42.01\%. Moreover, O$^2$-RTDETR with a ResNet-34 backbone achieves 40.45\% AP$_{50}$, while the ResNet-50 version reaches 43.14\% AP$_{50}$, outperforming all existing approaches by a clear margin.
+
+
+
+
+\EachProposedModuleOnDOTA
+
+\AblationAngleDistriRefine
+
+\AblationCost
+
+
+
+
+
+\subsection{Ablation Study}
+
+\textit{Model Improvement Roadmap.}
+Table \ref{EachProposedModuleOnDOTA} presents a step-by-step ablation study illustrating how each component contributes to the final performance on DOTA-v1.0. For O$^2$-DFINE-R18, AP$_{50}$ increases from 72.44\% to 76.14\% as oriented contrastive denoising, angle distribution refinement, and the Chamfer distance cost are introduced. For O$^2$-RTDETR-s, these components similarly raise AP$_{50}$ from 73.94\% to 77.31\%. Adding Matchability-Aware Loss~\cite{deim} and multi-scale training further improves O$^2$-DEIM-s to 79.49\%. Following ~\cite{deim}, multi-scale training as data augmentation provides more positive objects. All improvements come without extra cost, as our method focuses on detection optimization rather than modifying the feature extraction module.
+
+\textit{Number of bins $N$}.
+Table \ref{ablation_angle_distri_refine} evaluates the effect of the number of angle bins in the Angle Distribution Refinement. Increasing $N$ from 8 to 32 gradually improves performance, with the best result of 76.14\% AP$_{50}$ achieved at $N=32$. Further increasing the bin count to 64 or 128 does not provide additional gains and even leads to slight fluctuations.
+
+\textit{Weighting function parameters $a,c$.} We examine the hyper-parameters $a,c$ in weighting function $\mathcal{A}(\cdot)$ in Table \ref{ablation_angle_distri_refine}. When $c$ becomes excessively large, the weighting function degenerates toward a uniformly spaced linear form, which leads to suboptimal AP performance. Moreover, too large or small values of $a$ change the bounds of $\mathcal{A}(\cdot)$, thereby degrading localization accuracy.
+
+\textit{Different distance cost.}
+Table \ref{ablation_cost} compares different distance costs for bipartite matching. Using only KL divergence provides the weakest supervision, resulting in 73.69\% AP$_{50}$. In the subsequent experiments, KL divergence is kept as the IoU cost while additional distance terms are introduced. L1 distance yields a moderate improvement to 74.28\%, and adding geometric information through the Hausdorff distance further boosts accuracy to 75.05\%. The Chamfer distance achieves the best performance of 76.14\%, showing that it captures oriented object geometry more accurately.
+
+\textit{Chamfer distance cost weight.}
+We further examine the effect of the Chamfer distance weight in Table \ref{ablation_cost}. A balanced weight of 5.0 yields the highest 76.14\% AP$_{50}$, whereas smaller weights such as 4.0 and larger weights such as 6.0 lead to slight accuracy degradation. This suggests that unsuitable geometric constraints can disrupt the matching quality.
+
+
+\visualContrastiveDenoise
+
+\AblationDenoise
+
+
+\textit{Point number in Chamfer distance cost.}
+The number of points used in the Chamfer distance is also evaluated in Table \ref{ablation_cost}. Using the four vertices $\{v1,v2,v3,v4\}$ of the oriented box gives the best performance of 76.14\% AP$_{50}$. When more points are uniformly sampled along the four edges to form 16 or 32 points, the accuracy slightly decreases. This is because the four vertices already represent the convex hull of the box, and adding edge points increases the size of the point sets for both predictions and ground truths, causing small fluctuations in the Chamfer distance.
+
+
+\textit{Analysis of oriented contrastive denoising.}
+Table \ref{ablation_denoise} analyzes box noise, angle noise, geometric noise, and probability noise in oriented contrastive denoising. 
+Box noise achieves the best performance, reaching 76.14\% AP$_{50}$ with $\lambda_1=1.0, \lambda_2=2.0$. 
+In contrast, angle noise perturbs only the rotation $\theta$ while keeping $(c_x,c_y,w,h)$ unchanged, thus producing a much narrower range of variations.
+Geometric noise, which combines both box noise and angle noise, tends to generate perturbed boxes that deviate excessively from the ground truth. Since oriented boxes are sensitive to rotation, changes in $\theta$ can lead to IoU drops, reducing their effectiveness.
+Probability noise perturbs the covariance representation of the box, but the induced changes are relatively small and do not effectively influence the box center $(c_x,c_y)$, resulting in weaker supervision.
+
+\visualChamfer
+
+When no noise is added, both positive and negative samples are the same as ground-truth boxes. This case leads to two issues. First, the positive samples perfectly match the ground-truth boxes, resulting in zero loss. Second, identical samples are assigned as foreground objects and background at the same time, which confuses the model during training.
+
+\textit{Number of denoising query.}
+Table \ref{ablation_denoise} evaluates the impact of the number of denoising queries. We test a total of 100, 200, and 300 denoising queries, where positive and negative queries are kept in a 1:1 ratio. Increasing the query count from 100 to 200 improves AP$_{50}$ from 75.83\% to 76.14\%, while increasing the number to 300 yields nearly a similar result. When the number of denoising queries is small, the randomly generated noised boxes cover only limited cases. As the number increases, the model benefits from richer noise diversity until it saturates.
+
+
+
+
+
+
+
+\subsection{Qualitative Analysis}
+
+\textit{Oriented contrastive denoising.}
+\figurename~\ref{visual_contrastive_denoising} illustrates examples of oriented contrastive denoising under different noise types. The figure includes a box noise example with $\lambda_1=1.0$ and $\lambda_2=2.0$, an angle noise example with $\lambda_3=9.0$ and $\lambda_4=18.0$, a geometric noise example combining box and angle perturbations with $\lambda_1=1.0, \lambda_2=2.0, \lambda_3=9.0, \lambda_4=18.0$, and a probability noise example with $\lambda_5=0.3$ and $\lambda_6=0.6$. This provides intuitive insight into how different noise formulations perturb oriented boxes during training.
+
+
+\textit{Chamfer distance cost vs. other costs.} \figurename~\ref{visual_chamfer} displays examples comparing the Chamfer distance cost with KL divergence, L1, and Hausdorff distance costs. The KL divergence cost is zero when two squares have the same size and center. The L1 distance cost assigns a box far from the ground truth rather than a nearby box. The Hausdorff distance cost is determined by the farthest distance between two point sets. Our Chamfer distance cost effectively overcomes these limitations.
+
+\visualAngleDistRefine
+
+
+\heatmap
+
+\visualRoatedAttn
+
+
+\textit{Angle distribution refinement.}
+The angle distribution refinement analysis is shown in \figurename~\ref{visual_angle_dist_refine}. The golden external rectangles and vertex offsets represent initial predictions from the first decoder layer, while the red ones denote refined predictions from the final layer. The golden curves represent the initial unweighted and weighted probability distributions for the vertex offsets $(\epsilon,\eta)$ and the external rectangle edges $(\alpha, \beta, \gamma, \delta)$, while the red curves represent the refined distributions. In contrast to DFL~\cite{ppyoloer} without progressive angle refinement, our approach captures this process explicitly. The initial boxes roughly locate the target objects, and the refined distribution further fine-tunes the localization.
+
+
+\textit{Feature response analysis.}
+\figurename~\ref{visual_heatmap} visualizes the backbone output feature maps using heatmaps. 
+Compared with other methods, our method produces more compact and discriminative feature responses that align better with object regions. High activations concentrate on object areas, while background responses are suppressed. This demonstrates an improved geometry-aware feature representation for oriented detection.
+
+
+\textit{Sampling points in cross attention.}
+In vanilla cross attention, sampling points are axis-aligned and do not follow object orientation, leading to attention regions misaligned with object boundaries, as shown in \figurename~\ref{visual_rotated_attn}(a). In contrast, our method rotates sampling points according to object angles, allowing them to better align with oriented objects.
+
+
+
+\textit{Result comparison with other detectors.} \figurename~\ref{visual_results} illustrates a qualitative comparison between our approach and existing detectors on the DOTA-v1.0 dataset across challenging scenarios, including large-scale objects, dense object distributions, and low-light imagery. Our method outperforms other approaches on large objects, low-light scenes, and dense object layouts, yielding more accurate and stable results. 
+\figurename~\ref{visual_rotated_attn}(b) shows suboptimal detection results in dense scenes. Since detection transformers use a fixed number of queries, missed detections occur when the number of objects exceeds the query count.
+
+
+
+\visualresults
+
+\section{Conclusion}
+
+In this paper, we present the first real-time end-to-end oriented object detection transformer for remote sensing images. We first proposed Angle Distribution Refinement, which reformulates angle regression as an iterative refinement of probability distributions to capture rotation uncertainty. To mitigate geometric ambiguity during label assignment, we further introduced the Chamfer distance matching cost. In addition, we designed Oriented Contrastive Denoising with four noise modes to stabilize training, and proposed an instability metric to analyze assignment consistency across decoder layers. Based on these designs, we developed a family of real-time oriented detectors, including O$^2$-RTDETR, O$^2$-DFINE, and O$^2$-DEIM. Extensive experiments on four remote sensing benchmarks demonstrate that our approach achieves a favorable balance between accuracy and speed.  Code is available at \url{https://github.com/wokaikaixinxin/ai4rs}.
+
+
+\appendix
+
+\textit{Rotation-Aware Cross-Attention.}
+In O$^2$-RTDETR and O$^2$-DEIM cross-attention, the sampling points are rotated around the box center according to the predicted box angle. 
+In D-FINE~\cite{dfine}, the cross-attention performs uneven sampling across multiple feature scales. We extend this idea by rotating these unevenly sampled points according to the box orientation, forming the cross-attention used in O$^2$-DFINE.
+
+
+
+\textit{Sampling points in cross-attention.}
+\figurename~\ref{appendix_visual_rotated_attn} visualizes the sampling points in cross-attention. In Rotated Deformable DETR, sampling points are axis-aligned and do not follow object orientation, leading to misaligned attention regions. In contrast, O$^2$-RTDETR and O$^2$-DFINE rotate sampling points according to object angles. This allows sampling points to better align with oriented objects.
+
+\AppendixvisualRoatedAttn
+
+\bibliographystyle{IEEEtran}
+\bibliography{reference}
+
+
+
+\end{document}
+
+

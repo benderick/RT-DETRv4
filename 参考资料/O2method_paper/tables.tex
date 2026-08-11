@@ -1,0 +1,573 @@
+
+\usepackage{booktabs}
+\usepackage{amssymb}
+\usepackage{xcolor}
+\usepackage{multirow}
+
+\newcommand{\tablestyle}[2]{\setlength{\tabcolsep}{#1}\renewcommand{\arraystretch}{#2}\centering\footnotesize}
+
+\usepackage{color, colortbl}
+\definecolor{Gray}{gray}{0.9}
+
+\newcommand\dunderline[2][.4pt]{%
+  \raisebox{-#1}{\underline{\raisebox{#1}{\smash{\underline{#2}}}}}}
+
+\newcolumntype{S}{>{\footnotesize}c}
+
+
+\newcommand{\NMSAP}{
+\begin{table}[!t]
+\centering
+\caption{Effect of rotated IoU thresholds and confidence thresholds on RTMDet-s accuracy for DOTA-v1.0.}
+\begin{minipage}{0.49\linewidth}
+\centering
+    %\renewcommand{\arraystretch}{1.15}
+    \setlength{\tabcolsep}{3pt}
+    \begin{tabular}{c|ccc}
+    \toprule
+    \textbf{RIoU thr.}      &  \multirow{2}{*}{0.05}  & \multirow{2}{*}{0.3} & \multirow{2}{*}{0.5} \\ 
+    \textbf{(Conf=0.05)}    &                         &                      &  \\
+    \midrule
+    \textbf{AP$_{50}$ (\%)} & 76.53                 & 76.72                 & 76.70\\
+    \bottomrule
+    \end{tabular}
+    % \caption{The Effect of IoU.}
+\end{minipage}
+\begin{minipage}{0.49\linewidth}
+\centering
+    %\renewcommand{\arraystretch}{1.15}
+    \setlength{\tabcolsep}{3pt}
+    \begin{tabular}{c|ccc}
+    \toprule
+    \textbf{Conf thr.}   &  \multirow{2}{*}{0.01}   & \multirow{2}{*}{0.05}   & \multirow{2}{*}{0.25}       \\
+    \textbf{(RIoU=0.1)}  &                      &     \\
+    \midrule
+    \textbf{AP$_{50}$ (\%)} & 76.82                & 76.86                 & 75.61\\
+    \bottomrule
+    \end{tabular}
+    % \caption{The Effect of Score.}
+\end{minipage}
+\vspace{-0.5em}
+\label{NMSAP}
+\end{table}
+}
+
+
+\newcommand{\TableExpSetting}{
+    \begin{table}[t]
+    \centering
+    %\renewcommand\arraystretch{1.1}
+    \caption{Main hyperparameter of our detectors.}
+    \resizebox{\linewidth}{!}
+    {  
+        \begin{tabular}{l|ccc|ccc}
+        \toprule
+        \multirow{2}{*}{\textbf{Setting}} & \multicolumn{3}{c|}{\textbf{O$^2$-RTDETR}} & \multicolumn{3}{c}{\textbf{O$^2$-DFINE}}   \\
+                                 & \textbf{R18} & \textbf{R34} & \textbf{R50} & \textbf{S} & \textbf{M} & \textbf{L} \\
+        \midrule
+        Optimizer                & AdamW    & AdamW   & AdamW   & AdamW   & AdamW   & AdamW    \\
+        Base LR                  & 1e-4     & 1e-4    & 1e-4    & 5e-5    & 5e-5    & 6.25e-5  \\
+        Backbone LR              & 1e-5     & 1e-5    & 1e-5    & 2.5e-6  & 5e-6    & 3.125e-5 \\
+        Weight decay             & 1e-4     & 1e-4    & 1e-4    & 1e-4    & 1e-4    & 1.25e-4  \\
+        Clip grad                & 0.1      & 0.1     & 0.1     & 0.1     & 0.1     & 0.1      \\
+        Queries $K$              & 300      & 300     & 300     & 300     & 300     & 300      \\
+        Layers $L$               & 6        & 6       & 6       & 3       & 4       & 6        \\
+        Batchsize                & 8        & 8       & 8       & 8       & 8       & 8        \\
+        Epochs                   & 72       & 72      & 72      & 72      & 72      & 72       \\
+        %class cost wt            & 2        & 2       & 2       & 2       & 2       & 2        \\
+        %rbox cost wt             & 5        & 5       & 5       & 5       & 5       & 5        \\
+        %IoU cost wt              & 2        & 2       & 2       & 2       & 2       & 2        \\
+        %class loss wt            & 1        & 1       & 1       & 1       & 1       & 1        \\
+        %rbox loss wt             & 5        & 5       & 5       & 5       & 5       & 5        \\
+        %IoU loss wt              & 2        & 2       & 2       & 2       & 2       & 2       \\
+        \bottomrule
+        \end{tabular}
+    }
+            \label{expsetting}
+    \end{table}
+}
+
+
+\newcommand{\DIORRResults}{
+\begin{table*}[!htbp]
+    \setlength{\tabcolsep}{4pt}
+    \caption{Performance comparisons on the \textbf{DIOR-R} dataset. The \textbf{best} and \dunderline{second-best} results are highlighted in \textbf{bold} and \dunderline{underlined}.}
+    \resizebox{\linewidth}{!}
+    {
+    \begin{tabular}{lccccccccccccccccccccccc}
+    \toprule
+    \textbf{Method} & \textbf{Back.} & \textbf{\#P} & \textbf{APL} & \textbf{APO} & \textbf{BF} & \textbf{BC} & \textbf{BR} & \textbf{CH} & \textbf{DAM} & \textbf{ETS} & \textbf{ESA} & \textbf{GF} & \textbf{GTF} & \textbf{HA} & \textbf{OP} & \textbf{SH} & \textbf{STA} & \textbf{STO} & \textbf{TC} & \textbf{TS} & \textbf{VE} & \textbf{WM} & \textbf{AP$_{50}$}  \\
+    \midrule
+    %RetinaNet-O~\cite{focal_loss} &R50 &  & 61.49    & 28.52    & 73.57    & 81.17    & 23.98    & 72.54    & 19.94    & 72.39    & 58.20    & 69.25    & 79.54    & 32.14    & 44.87    & 77.71    & 67.57    & 61.09    & 81.46    & 47.33    & 38.01    & 60.24    & 57.55    \\
+    %DFDet~\cite{dfdet}  & R50 &   & 61.92 & 38.83 & 77.41 & 81.36 & 34.11 & 74.97 & 26.26 & 62.31 & 76.06 & 75.56 & 79.62 & 38.26 & 52.76 & 80.40 & 73.11 & 68.27 & 81.38 & 52.23 & 44.11 & 63.35 & 62.11 \\
+    %G.V.~\cite{gliding_vertex} & R50  & 41M & 65.35    & 28.87    & 74.96    & 81.33    & 33.88    & 74.31    & 19.58    & 70.72    & 64.70    & 72.30    & 78.68    & 37.22    & 49.64    & 80.22    & 69.26    & 61.13    & 81.49    & 44.76    & 47.71    & 65.04    & 60.06    \\
+    RoI Trans.~\cite{roi_transformer} & R50 & 55M & 63.34    & 37.88    & 71.78    & 87.53    & 40.68    & 72.60    & 26.86    & \dunderline{78.71}    & 68.09    & 68.96    & 82.74    & 47.71    & 55.61    & 81.21    & \dunderline{78.23} & 70.26    & 81.61    & 54.86    & 43.27    & 65.52    & 63.87    \\
+    O-RCNN~\cite{orientedrcnn} & R50 & 41M & 71.10 & 39.30 & \textbf{79.50} & 86.20 & 43.10 & 72.60 & 29.50 & 66.70 & 79.30 & 68.60 & 82.40 & 43.60 & 57.60 & 81.30 & 74.20 & 62.60 & 81.40 & 54.80 & 46.80 & 66.00 & 64.30 \\
+    AOPG~\cite{dior} & R50  & - & 62.39    & 37.79    & 71.62    & 87.63    & 40.90    & 72.47    & 31.08    & 65.42    & 77.99    & 73.20    & 81.94    & 42.32    & 54.45    & 81.17    & 72.69    & 71.31    & 81.49    & 60.04 & 52.38    & 69.99    & 64.41    \\
+    ARS-DETR~\cite{arsdetr} & R50  & 41M & 68.00    & 54.17    & 74.43    & 81.65    & 41.13    & 75.66    & 34.89    & 73.07    & 81.92 & 76.10 & 78.62  & 36.33    & 55.41    & 84.55    & 70.09    & 72.23    & 81.14    & 61.52    & 50.57    & 70.28    & 66.12    \\
+    RO$^2$-DETR~\cite{ro2detr} & R50 & - &  69.78 & 54.77 & 74.49 & 82.11 & 42.30 & 76.66 & 33.94 & 72.99 & 82.01 & 76.11 & 78.56 & 40.11 & 56.06 & 85.06 & 73.11 & 72.19 & 84.10 & 60.66 & 53.02 & 71.11 & 66.43 \\
+    OrientedRep~\cite{oriented_reppoints} & R50 & 36M & 70.03 & 46.11    & 76.12    & 87.19    & 39.14    & 78.76    & 34.57    & 71.80    & 80.42    & 76.16    & 79.41    & 45.48    & 54.90    & 87.82    & 77.03    & 68.07    & 81.60    & 56.83    & 51.57    & 71.25 & 66.71    \\
+    DCFL~\cite{dcfl} & R50  & 36M & 68.60    & 53.10    & 76.70 & 87.10    & 42.10    & 78.60 & 34.50    & 71.50    & 80.80    & \textbf{79.70} & 79.50    & 47.30    & 57.40    & 85.20    & 64.60    & 66.40    & 81.50    & 58.90    & 50.90    & 70.90    & 66.80    \\
+    %QPDet~\cite{QPDet} & R50  & & 63.22    & 41.39    & 71.97    & \textbf{88.55} & 41.23    & 72.63    & 28.82    & \textbf{78.90} & 69.00    & 70.07    & \textbf{83.01} & 47.83 & 55.54    & 81.23    & 72.15    & 62.66    & \textbf{89.05} & 58.09    & 43.38    & 65.36    & 64.20    \\
+    %DODet~\cite{dodet} & R50   &     & 63.40 & 43.35 & 72.11 & 81.32 & \textbf{43.12} & 72.59 & 33.32 & 78.77 & 70.84 & 74.15 & 75.47 & \textbf{48.00} & \textbf{59.31} & 85.41 & 74.04 & 71.56 & 81.52 & 55.47 & 51.86 & 66.40 & 65.10 \\
+    OFormer~\cite{orientedformer} & R50  & 44M & 65.65    & 48.69 & 78.79    & 87.17    & 41.90 & 76.34    & 34.37 & 72.14    & 81.40    & 75.34    & 79.83    & 45.15    & 56.12 & \dunderline{88.66} & 67.59  & 72.68 & 87.32    & 60.31    & 56.54 & 69.56  & 67.28 \\
+    RQFormer~\cite{rqformer} & R50 & 41M & 67.31 & 55.23 & 74.19 & 82.74 & 44.49 & 78.56 & 39.85 & 70.27 & 79.84 & 75.10 & 80.38 & 45.64 & 58.51 & 88.91 & 68.10 & 75.73 & 85.52 & 57.17 & 53.54 & 65.05 & 67.31\\
+    ReDiffDet~\cite{rediffdet} & ReR50 & - & 71.36 & 49.22 & 71.65 & \dunderline{87.88} & 47.12 & 79.28 & 33.35 & 73.37 & 83.74 & 70.29 & 80.38 & 43.63 & 57.17 & \textbf{89.52} & 72.39 & \textbf{79.81} & \textbf{89.03} & 57.34 & 57.32 & 67.23 & 68.05 \\
+    GSDet~\cite{gsdet} & R50 & 106M & 81.07 & \dunderline{58.94} & 78.06 & 85.91 & \dunderline{48.64} & 77.55 & \textbf{42.51} & 73.25 & 86.18 & 75.04 & 78.98 & 41.29 & \dunderline{59.81} & 87.54 & \textbf{78.43} & 76.96 & 87.22 & 58.06 & \dunderline{57.30} & 68.25 & \dunderline{70.05} \\
+    \midrule
+    \textbf{O$^2$-RTDETR} & R34 & 31M & 71.58 & 50.71 & 79.10 & 83.75 & 48.09 & 77.85 & 37.19 & 74.22 & 84.34 & 75.62 & \dunderline{83.01} & 44.28 & 59.24 & 85.51 & 70.21 & 75.14 & 84.63 & \dunderline{62.03} & 54.74 & \dunderline{72.17} & 68.67 \\
+    \textbf{O$^2$-RTDETR} & R50 & 42M & \textbf{79.36} & \textbf{59.61} & \dunderline{79.33} & \textbf{88.73} & \textbf{50.80} & \textbf{81.42} & \dunderline{42.34} & \textbf{79.64} & \textbf{89.53} & \dunderline{78.05} & \textbf{83.95} & \textbf{50.01} & \textbf{61.35} & 88.46 & 72.80 & \dunderline{77.34} & \dunderline{88.47} & 61.80 & \textbf{59.09} & \textbf{73.02} & \textbf{72.26} \\
+    \textbf{O$^2$-DFINE-s} & HG-B0 & 10M & 66.89 & 47.97 & 77.73 & 83.51 & 43.64 & 78.37 & 32.82 & 69.65 & 84.01 & 77.17 & 82.04 & 45.14 & 56.78 & 85.91 & 73.74 & 71.63 & 82.82 & \textbf{62.18} & 52.62 & 66.22 & 67.05 \\
+    \textbf{O$^2$-DFINE-m} & HG-B2 & 19M & \dunderline{76.83} & 51.90 & 78.22 & 85.52 & 46.93& \dunderline{80.79} & 37.72 & 77.23 & \dunderline{89.24} & 77.60 & 82.42 & \dunderline{49.78} & 58.00 & 87.16 & 67.20 & 77.27 & 86.55 & 61.01 & 54.65 & 71.25 & 69.86\\
+    \bottomrule
+    \end{tabular}
+    }
+    \label{DIOR-R-result}
+    \end{table*}
+}
+
+
+
+
+
+%------------------------DOTA-1.0-result------------------------------------------------------
+%------------------------DOTA-1.0-result------------------------------------------------------
+% Please add the following required packages to your document preamble:
+% \usepackage[table,xcdraw]{xcolor}
+% Beamer presentation requires \usepackage{colortbl} instead of \usepackage[table,xcdraw]{xcolor}
+\newcommand{\DOTAOneResults}{
+\begin{table*}[!tb]
+\caption{Performance comparisons on the \textbf{DOTA-v1.0} dataset. $^\clubsuit $ indicates multi-scale training and testing. FLOPs are computed for an input size of (1,3,1024,1024). FPS is measured on an NVIDIA RTX 2080Ti using TensorRT in FP16 mode with an input size of (1,3,1024,1024). The \textbf{best} and \dunderline{second-best} results are highlighted in \textbf{bold} and \dunderline{underlined}.}
+%\fontsize{8pt}{10pt}\selectfont
+\setlength{\tabcolsep}{1.2mm}
+%\setlength{\aboverulesep}{0.4ex}
+%\setlength{\belowrulesep}{0.4ex}
+%\setlength{\abovecaptionskip}{1.5mm}
+\centering
+\resizebox{\linewidth}{!}{
+%\begin{tabular}{l|ccccc|SSSSSSSSSSSSSSSSS|S}
+\begin{tabular}{l|ccccc|ccccccccccccccc|c}
+\toprule
+\textbf{Methods} & \textbf{Back.} & \textbf{\#P} & \textbf{FLOPs} & \textbf{FPS} & \textbf{Pre.} & \textbf{PL} & \textbf{BD} & \textbf{BR} & \textbf{GTF} & \textbf{SV} & \textbf{LV} & \textbf{SH} & \textbf{TC} & \textbf{BC} & \textbf{ST} & \textbf{SBF} & \textbf{RA} & \textbf{HA} & \textbf{SP} & \textbf{HC} & \textbf{AP}$_\text{50}$ \\ 
+
+%\midrule
+\hline
+\hline
+
+\rowcolor{gray!15} \multicolumn{22}{l}{$\blacktriangledown$ \textit{Non-real-time Oriented Object Detectors}} \\
+%DefDETR-R  & R50 & 41M & & & IN & 84.69 & 71.46 & 43.42 & 59.88 & 74.01 & 77.21 & 86.91 & 90.84 & 82.89 & 75.89 & 54.32 & 57.85 & 63.93 & 69.73 & 50.28 & 69.55\\
+ARS-DETR~\cite{arsdetr} & R50 & 41M & 407G & - & IN & 86.97 &75.56 &48.32 &69.20 &77.92& 77.94 &87.69 &90.50& 77.31 &82.86 &60.28 &64.58 &74.88& 71.76& 66.62 &74.16\\
+%AO2-DETR & R50 & 41M & & & IN & 89.27 & 84.97 &56.67& 74.89& 78.87& 82.73& 87.35& 90.50& 84.68& 85.41& 61.97& 69.96& 74.68& 72.39& 71.62& 77.73 \\
+%Oriented-DINO & R50 & & & & IN & 88.49 & 78.46 & 54.31 & 72.74 & 79.06 & 80.87 & 88.56 & 90.76 & 80.25 & 84.95 & 63.56 & 67.66 & 77.30 & 80.72 & 70.28 & 77.20 \\
+%EMO2-DETR & R50 & & & & IN & 88.08 & 77.91 & 43.17 & 62.91 & 74.01 & 75.09 & 79.21 & 90.88 & 81.50 & 84.04 & 51.92 & 59.44 & 64.74 & 71.81 & 58.96 & 70.91 \\
+RO$^2$-DETR~\cite{ro2detr} & R50 & - & - & - & IN & 88.98 & 82.13 & 54.58 & 76.28 & 79.28 & 77.92 & 87.94 & 90.90 & 87.19 & 85.65 & 62.20 & 62.63 & 74.62 & 72.42 & 59.22 & 77.57\\
+O-DETR~\cite{orienteddetr} & R50 & 57M & 563G & - & coco & 89.20 & \textbf{86.40} & \dunderline{57.70} &75.30 &81.10 &84.70 & \dunderline{89.10} &90.90 &86.10 &87.00& 59.50 &70.30 &79.30& 81.50& 68.80 &79.10\\
+MessDet~\cite{messdet} & CSPnext & 13M & 191G & - & IN & 89.28 & 84.69 & 56.20 &66.18 & 81.37 & 85.33 &88.86 & 90.78 & 88.28& 87.62 &64.47& 65.59 &78.18& 82.10 &67.82 & 78.45\\
+ReDiffDet~\cite{rediffdet} & ReR50 & - & - & - & IN & 86.32& 78.72& 51.56& 71.89& 80.05& 84.73& 88.75& 90.84& 85.92& 86.69 &59.48& 57.74 &75.19& 68.43 &65.37 & 75.45 \\
+FRED~\cite{fred} & ReR50 & - & - & - & IN &  89.37& 82.12& 50.84& 73.89& 77.58& 77.38& 87.51& 90.82& 86.30 &84.25& 62.54& 65.10 &72.65 &69.55& 63.41 & 75.56 \\
+GauCho$^\clubsuit $~\cite{gaucho} & R50 & 55M & 505G & - & IN & 88.96& 81.01& 57.39 &72.21 & \textbf{82.40} &85.41 &88.51 &90.85 &85.42 &86.40 &66.42 &70.19& 76.10 &80.42 &71.00 &78.85 \\
+ACM$^\clubsuit $~\cite{acm}   & R50 & - & - & - & IN & \dunderline{89.84} & 85.50& 53.84& 74.78& 80.77& 82.81& 88.92& 90.82& 87.18& 86.53& 64.09& 66.27& 77.51& 79.62& 69.57& 78.53\\
+GSDet~\cite{gsdet} & R50 & 106M & 433G & - & IN & 88.57 & 81.17 &51.70& 73.19& 80.22& 83.54& 88.64& 90.82& 84.10& 81.59& 59.48 &64.69& 75.08& 70.00 &63.33 &75.74 \\
+O-RCNN~\cite{orientedrcnn} & R50 & 41M & 450G & - & IN & 89.46 & 82.12 & 54.78 & 70.86 & 78.93 & 83.00 & 88.20 & 90.90 & 87.50 & 84.68 & 63.97 & 67.69 & 74.94 & 68.84 & 52.28 & 75.87 \\
+O-RCNN~\cite{orientedrcnn} & PKI~\cite{pkinet} &31M & 407G & - & IN &  89.72& 84.20& 55.81 &77.63 &80.25 &84.45& 88.12 &90.88& 87.57& 86.07& 66.86& 70.23 &77.47 &73.62 &62.94& 78.39 \\
+O-RCNN~\cite{orientedrcnn} & LSK~\cite{lsknet} &31M & 375G & - & IN & 89.66& 85.52& \textbf{57.72} & 75.70 &74.95 &78.69 &88.24& 90.88 &86.79 &86.38& 66.92& 63.77& 77.77 &74.47& 64.82& 77.49\\
+
+
+%\midrule
+\hline
+\hline
+
+\rowcolor{gray!15} \multicolumn{22}{l}{$\blacktriangledown$ \textit{Non-end-to-end Real-time Oriented Object Detectors}} \\
+%YOLOX-t & CSP-t & 5M & 39G & 225 & none & 86.95 & 81.30 & 46.32 & 65.07 & 78.13 & 85.01 & 88.94 & 90.85 & 86.50 & 85.99 & 54.62 & 61.48 & 66.70 & 70.91 & 52.00 & 73.38\\
+YOLOX-s~\cite{yolox} & CSP-s & 9M & 68G & 237 & none & 86.43 & 82.94 & 47.92 & 65.51 & 78.02 & 84.97 & 89.07 & 90.84 & 87.99 & 86.01 & 58.29 & 63.63 & 73.23 & 69.81 & 59.51 & 74.94\\
+YOLOX-m~\cite{yolox} & CSP-m & 25M & 188G & 154 & none & 86.84 & \dunderline{86.40} & 54.27 & 70.04 & 81.03 & \dunderline{85.68} & \textbf{89.27} & 90.71 & 86.32 & 86.17 & 60.31 & 65.52 & 75.66 & 72.68 & 59.53 & 76.70\\
+PPYOLOE-s~\cite{ppyoloer} & CRN-s & 8M & 45G & 70 & IN & 88.80 & 79.24 & 45.92 & 66.88& 80.41& 82.95& 88.20& 90.61& 82.91& 86.37& 55.80& 64.11& 65.09 &79.50 & 50.43& 73.82\\
+PPYOLOE-m~\cite{ppyoloer} & CRN-m & 23M & 131G & 55 & IN & 89.23& 79.92& 51.14& 72.94& 81.86& 84.56& 88.68& 90.85& 86.85& 87.48& 59.16& 68.34& 73.78& 81.72& 68.10&77.64\\
+PPYOLOE-l~\cite{ppyoloer} & CRN-l & 52M & 291G & 48 & IN & 89.18& 81.00& 54.01& 70.22& 81.85& 85.16& 88.81& 90.81& 86.99& 88.01& 62.87& 67.87& 76.56& 79.13& 69.65&78.14\\
+YOLOv5-n~\cite{yolov5} & CSP-n & 2M & 13G & 108 & coco & 89.82 & 75.73 & 44.75 & 62.78 & 79.91 & 82.80 & 87.91 & 90.83 & 79.15 & 87.12 & 50.54 & 63.11 & 67.49 & 80.07 & 56.87 & 73.26 \\ 
+YOLOv5-s~\cite{yolov5} & CSP-s & 8M & 45G & 98 & coco & 89.26 & 84.53 & 51.36 &60.69 & 80.70 & 84.74 & 88.41 & 90.68 & 85.93& 87.59 & 59.62 & 65.18 & 74.53 & 81.71 & 66.91 & 76.79\\
+YOLOv5-m~\cite{yolov5} & CSP-m & 22M & 129G & 72 & coco & 89.60 & 86.39 & 54.62 & 62.04 & 80.36& 85.20 & 88.40 & 90.80 & 80.54 & \dunderline{88.47} & 64.16 & 61.21 & 76.70 & \textbf{83.13} & 67.91 & 77.30\\
+PSC-s~\cite{psc} & CSP-s & 8M & 45G & 98 & coco & 89.65 & 86.37 & 51.76 & 63.42 & 81.21 & 84.63 & 88.29 & 90.80 & 85.39 & 87.93 & 61.00 & 66.41 & 75.01 & 81.77 & 66.20 & 77.32\\
+PSC-m~\cite{psc} & CSP-m & 22M & 129G & 72 & coco & \textbf{89.85} & 85.93 & 54.94 & 61.56 & \dunderline{81.89} & 85.47 & 88.37 & 90.73 & 86.90 & \textbf{88.79} & 63.90 & \textbf{68.92} & 76.82 & \dunderline{82.83} & 63.25 & 78.01\\
+RTMDet-s~\cite{rtmdet} & CSP-s & 9M & 126G & 197 & IN & 89.18& 80.45& 52.09& 71.35& 81.55& 84.05& 88.79& 90.89& 87.83& 86.98& 59.58& 62.28& 75.90& 81.96& 61.04&76.93
+\\
+RTMDet-m~\cite{rtmdet} & CSP-m & 25M & 314G & 120 & IN & 89.17& 84.65& 53.92& 74.67& 81.48& 83.99& 88.71& 90.85& 87.43& 87.20& 59.39& 66.68& 77.71& 82.40& 65.28&78.24\\
+RTMDet-l~\cite{rtmdet} & CSP-l & 52M & 612G & 86 & IN & 89.43& 84.21& 55.20& 75.06& 80.81& 84.53& 88.97& 90.90& 87.38& 87.25& 63.09& 67.87& 78.09& 80.78& 69.13&78.85\\
+YOLOMS-xs~\cite{yoloms} & MS-xs & 4M & 73G & 139 & coco & 89.44&84.21&52.63&74.07&81.76&82.51&88.71&90.90&87.66&86.50&63.04&58.84&76.51&69.19&52.18 & 75.88 \\
+YOLOMS-s~\cite{yoloms} & MS-s & 8M & 131G & 100 & coco &89.37 & 83.92 & 53.26 & 73.54 & 81.75 & 84.94 & 88.91 & 90.89 & \dunderline{88.34} & 87.86 & 61.99 & 56.97 & 77.54 & 75.65 & 53.26&76.55\\
+%dYOLOMS & MS & 22M & 319G &  & coco \\
+%\midrule
+\hline
+\hline
+
+\rowcolor{gray!15} \multicolumn{22}{l}{$\blacktriangledown$ \textit{End-to-end Real-time Oriented Object Detection}} \\ 
+RTDETR-R & R18 & 20M & 147G & 233 & IN & 86.20 & 69.96 & 50.33 & 70.66 & 78.79 & 84.32 & 87.40 & 90.28 & 85.05 & 77.55 & 52.01 & 56.58 & 76.27 & 79.82 & 63.89 & 73.94\\
+RTDETR-R & R34 & 31M & 228G & 174 & IN & 87.24 & 78.31 & 51.37 & 70.85 & 79.54 & 83.75 & 87.31 & 90.02 & 86.71 & 84.64 & 57.25 & 61.18 & 76.22 & 70.09 & 58.69 & 74.88\\
+RTDETR-R & R50 & 42M & 339G & 119 & IN & 87.46 & 77.98 & 51.60 & 72.06 & 79.66 & 84.10 & 87.72 & 90.29 & 87.32 & 84.81 & 57.37 & 60.28 & 76.59 & 71.37 & 60.29 & 75.26\\
+\rowcolor{gray!15} O$^2$-RTDETR & R18 & 20M & 147G & 233 & IN &88.96 & 84.23 & 51.98 & 71.53 & 80.19 & 84.98 & 88.40 & 90.87 & 87.86 & 85.47 & 57.69 & 66.27 & 77.19 & 74.62 & 69.42 & 77.31\\
+\rowcolor{gray!15} O$^2$-RTDETR & R34 & 31M & 228G & 174 & IN &88.88 & 83.77 & 53.75 & 73.90 & 80.76 & 85.36 & 88.61 & 90.87 & 86.64 & 86.75 & 58.31 & 66.44 & 77.25 & 80.07 & 70.68  & 78.13\\
+\rowcolor{gray!15} O$^2$-RTDETR & R50 & 42M & 339G & 119 & IN &89.27 & 84.06 & 56.50 & 75.85 & 80.02 & 84.06 & 88.05 & 90.85 & 85.32 & 86.68 & 63.19 & 64.96 & 77.76 & 77.80 & 72.38 & 78.45  \\
+\rowcolor{gray!15} O$^2$-DEIM$^\clubsuit $ & R18 & 20M & 147G & 233 & coco & 88.60 & 83.38 & 54.00 & 79.62 & 80.13 & \textbf{85.93} & 88.57 & 90.90 & 88.11 & 85.77 & 67.55 & 66.67 & 77.11 & 77.99 & 77.96 & 79.49\\
+\rowcolor{gray!15} O$^2$-DEIM$^\clubsuit $ & R34 & 31M & 228G & 174 & coco & 88.03 & 84.62 & 56.97 & \dunderline{80.02} & 81.05 & 84.74 & 88.62 & \dunderline{90.90} & \textbf{88.54} & 86.86 & \dunderline{68.80} & \dunderline{68.86} & \textbf{80.28} & 79.00 & 73.27 & \dunderline{80.04} \\
+\rowcolor{gray!15} O$^2$-DEIM$^\clubsuit $ & R50 & 42M & 339G & 119 & coco & 88.14 & 84.89 & 57.13 & \textbf{80.34} & 81.21 & 84.54 & 88.67 & \textbf{90.90} & 88.31 & 86.97 & \textbf{69.83} & 68.80 & \dunderline{80.20} & 78.71 & \dunderline{73.56} & \textbf{80.15} \\
+DFINE-R-s & HG-B0 & 10M & 60G & 297 & IN & 85.75 & 62.29 & 47.76 & 67.69 & 79.62 & 80.99 & 87.60 & 90.30 & 82.41 & 78.69 & 57.09 & 55.67 & 74.43 & 72.62 & 63.63 & 72.44 \\
+DFINE-R-m & HG-B2 & 19M & 142G & 176 & IN & 86.33 & 69.91 & 49.68 & 66.18 & 79.69 & 84.47 & 88.28 & 90.85 & 87.80 & 78.41 & 55.04 & 52.89 & 76.32 & 71.66 & 71.31 & 73.92 \\
+DFINE-R-l & HG-B4 & 31M & 229G & 132 & IN & 85.72 & 72.69 & 50.50 & 66.14 & 79.76 & 84.55 & 88.30 & 90.90 & 86.52 & 77.60 & 55.50 & 55.61 & 75.89 & 71.95 & 69.78 & 74.09 \\
+\rowcolor{gray!15} O$^2$-DFINE-s & HG-B0 & 10M & 60G & 297 & IN & 88.84 & 75.59 & 53.97 & 69.09 & 80.02 & 85.02 & 88.51 & 90.85 & 87.71 & 87.63 & 56.32 & 63.23 & 77.10 & 69.23 & 68.88 & 76.14 \\
+\rowcolor{gray!15} O$^2$-DFINE-m & HG-B2 & 19M & 142G & 176 & IN & 89.42 & 81.80 & 53.92 & 72.89 & 79.42 & 83.90 & 88.21 & 90.88 & 86.56 & 86.42 & 58.51 & 66.03 & 77.41 & 78.28 & 70.46 & 77.61 \\
+\rowcolor{gray!15} O$^2$-DFINE-l & HG-B4 & 31M & 229G & 132 & IN & 89.08 & 80.18 & 55.17 & 69.73 & 80.53 & 83.77 & 88.46 & 90.86 & 87.55 & 86.86 & 60.14 & 68.68 & 77.17 & 77.79 & 70.03 & 77.73 \\
+\bottomrule
+\end{tabular}}
+\label{DOTA-1.0-result}
+\end{table*}
+}
+%------------------------DOTA-1.0-result------------------------------------------------------
+%------------------------DOTA-1.0-result------------------------------------------------------
+
+
+
+%------------------------DOTA-1.5-result------------------------------------------------------
+%------------------------DOTA-1.5-result------------------------------------------------------
+\newcommand{\TableDOTAVonefiveResult}{
+    \begin{table*}[!t]
+    \setlength{\tabcolsep}{5pt}
+    %\renewcommand\arraystretch{1.1}
+    % \caption{Comparison with state-of-the-art methods on the \textbf{DOTA-v1.5}. The results in \textbf{bold} denote the best performance of each column.}
+    \caption{Performance comparisons on the \textbf{DOTA-v1.5} dataset. The \textbf{best} and \dunderline{second-best} results are highlighted in \textbf{bold} and \dunderline{underlined}. Results are reported under single-scale training and testing.}
+    \resizebox{\linewidth}{!}
+    {
+        \begin{tabular}{lccccccccccccccccccc}
+        %\begin{tabular}{lSSSSSSSSSSSSSSSSSSS}
+        \toprule
+        \textbf{Method} & \textbf{Back.} & \textbf{\#P} & \textbf{PL} & \textbf{BD} & \textbf{BR} & \textbf{GTF} & \textbf{SV} & \textbf{LV} & \textbf{SH} & \textbf{TC} & \textbf{BC} & \textbf{ST} & \textbf{SBF} & \textbf{RA} & \textbf{HA} & \textbf{SP} & \textbf{HC} & \textbf{CC} & \textbf{AP$_{50}$} \\
+        \midrule
+        %EMO2-DETR~\cite{emo2detr} & R50 & - & 71.81 & 75.36 & 45.09 & 58.70 & 48.19 & 73.26 & 80.28 & 90.70 & 73.05 & 76.53 & 39.36 & 65.31 & 56.96 & 69.29 & 47.11 & 15.64 & 61.67 \\
+        %Mask R-CNN~\cite{mask_rcnn} & R50 & & 76.84 & 73.51 & 49.90 & 57.80 & 51.31 & 71.34 & 79.75 & 90.46 & 74.21 & 66.07 & 46.21 & 70.61 & 63.07 & 64.46 & 57.81 & 9.42 & 62.67 \\
+        %HTC~\cite{htc} & R50 & & 77.80 & 73.67 & 51.40 & 63.99 & 51.54 & 73.31 & 80.31 & 90.48 & 75.12 & 67.34 & 48.51 & 70.63 & 64.84 & 64.48 & 55.87 & 5.15 & 63.40 \\
+        %AO2-DETR~\cite{ao2detr} & R50 & 41M & 79.55 & 78.14 & 42.41 & 61.23 & 55.34 & 74.50 & 79.57 & 90.64 & 74.76 & 77.58 & 53.56 & 66.91 & 58.56 & 73.11 & 69.64 & 24.71 & 66.26 \\
+        GauCho~\cite{gaucho} & R50 & 55M &76.42 & 72.78 & 48.42 & 59.72 & 61.65 & 75.19 & 84.83 & \dunderline{90.88} & 76.44 & 73.88 & 56.75 & 69.51 & 62.98 & 67.79 & 50.55 & 13.65 & 65.09 \\
+        ReDet~\cite{redet} & ReR50 & 32M & 79.20 & 82.81 & 51.92 & 71.41 & 52.38 & 75.73 & 80.92 & 90.83 & 75.81 & 68.64 & 49.29 & 72.03 & 73.36 & 70.55 & 63.33 & 11.53 & 66.86 \\
+        DCFL~\cite{dcfl} & R50 & 36M & - & - & - & - & 56.72 & - & 80.87 & - & - & 75.65 & - & - & - & - & - & - & 67.37 \\
+        RQFormer~\cite{rqformer} & R50 & 41M & 78.44 & 75.43 & 48.84 & 63.62 & 62.16 & 78.41 & 88.94 & 90.84 & 75.29 & 81.83 & 57.05 & 66.44 & 73.95 & 72.69 & 51.64 & 13.37 & 67.43\\
+        %DCFL & ReR101 & & - & - & - & - & 52.38 & - & 86.60 & - & - & 76.55 & - & - & - & - & - & - & 70.24 \\
+        GSDet~\cite{gsdet} & R50 & 106M & \dunderline{80.48} & 72.51 & 49.11 & 71.19 & 57.75 & 78.96 & 88.93 & 90.85 & 79.44 & 77.52 & 55.77 & 65.56 & 71.36 & 70.40 & 65.41 & 10.26 & 67.84 \\
+        FRED~\cite{fred} & R50 & - & 79.60 & 81.44 & 52.60 & 72.57 & 58.07 & 74.82 & 86.12 & 90.81 & 82.13 & 74.84 & 53.37 & 72.93 & 69.51 & 69.91 & 54.82 & 19.27 & 68.30\\
+        O-RCNN~\cite{orientedrcnn} & LSK-s~\cite{lsknet} & 31M & 72.05 & 84.94 & \dunderline{55.41} & \textbf{74.93} & 52.42 & 77.45 & 81.17 & 90.85 & 79.44 & 69.00 & 62.10 & \dunderline{73.72} & 77.49 & 75.29 & 55.81 & 42.19 & 70.26 \\
+        O-RCNN~\cite{orientedrcnn} & PKI-s~\cite{pkinet} & 31M & 80.31 & \dunderline{85.00} & \textbf{55.61} & \dunderline{74.38} & 52.41 & 76.85 & 88.38 & 90.87 & 79.04 & 68.78 & \textbf{67.47} & 72.45 & 76.24 & 74.53 & 64.07 & 37.13 & 71.47 \\
+        RHINO~\cite{rhino} & R50 & 48M & 77.96 & 83.22 & 55.30 & 72.14 & 65.07 & 78.95 & 89.22 & 90.78 & 80.90 & \textbf{83.48} & 61.58 & \textbf{74.17} & 77.21 & 71.99 & 60.16 & 29.26 & 71.96 \\
+
+        MessDet~\cite{messdet} & CSPnext & 13M & \textbf{80.61} & 84.99 & 54.56 & 65.36 & \textbf{73.60} & \textbf{82.69} & \textbf{89.73} & 90.83 & 82.46 & 82.03 & 59.35 & 72.96 & \dunderline{77.66} & 75.14 & 65.09 & 21.12 & 72.38\\
+        RTMDet-s~\cite{rtmdet} & CSPnext-s & 9M & 80.05 & 84.36 & 50.65 & 72.04 & 59.54 & 81.79 & 89.22 & \textbf{90.90} & \dunderline{83.07} & 76.27 & 56.82 & 72.13 & 76.25 & \textbf{77.04} & 65.66 & 32.84 & 71.79 \\
+        RTMDet-m~\cite{rtmdet} & CSPnext-m & 25M & 80.34 & \textbf{86.00} & 54.02 & 72.98 & 63.21 & \dunderline{82.09} & \dunderline{89.46} & 90.87 & \textbf{85.12} & 76.69 & \dunderline{63.12} & 72.14 & \textbf{77.91} & \dunderline{76.04} & 71.57 & 32.24 & \dunderline{73.36} \\
+        \midrule
+        \textbf{O$^2$-RTDETR} & R34 & 31M &73.92 & 84.31 & 54.07 & 69.62 & \dunderline{65.92} & 80.48 & 88.91 & 90.82 & 79.37 & 80.37 & 55.95 & 69.60 & 74.91 & 73.70 & 74.38 & \dunderline{34.20} & 71.91\\
+        \textbf{O$^2$-RTDETR} & R50 & 42M & 80.43 & 83.97 & 53.37 & 72.14 & 66.58 & 80.10 & 89.40 & 90.80 & 78.94 & \dunderline{83.45} & 58.44 & 70.38 & 76.73 & 75.56 & \dunderline{75.11} & \textbf{44.77} & \textbf{73.76}\\
+        \textbf{O$^2$-DFINE-s} & HG-B0 & 10M & 74.73 & 81.99 & 53.87 & 66.56 & 64.88 & 77.82 & 88.39 & 90.74 & 77.57 & 78.65 & 55.70 & 68.69 & 69.33 & 70.79 & 71.07 & 32.83 & 70.22 \\
+        \textbf{O$^2$-DFINE-m} & HG-B2 & 19M & 77.64 & 84.11 & 54.08 & 69.34 & 65.58 & 80.77 & 88.64 & 90.60 & 79.13 & 80.64 & 57.64 & 69.86 & 74.56 & 73.54 & \textbf{76.19} & 32.10 & 72.15\\
+        \bottomrule
+        \end{tabular}
+    }
+
+
+    \label{DOTA-1.5-result}
+    \end{table*}
+}
+%------------------------DOTA-1.5-result------------------------------------------------------
+%------------------------DOTA-1.5-result------------------------------------------------------
+
+
+
+
+%------------------------FAIR1M1.0-result------------------------------------------------------
+%------------------------FAIR1M1.0-result------------------------------------------------------
+\newcommand{\TableFAIRResult}{
+    \begin{table*}[!htbp]
+    %\large
+    %\renewcommand\arraystretch{1.2}
+    %\caption{Comparison with state-of-the-art methods on the \textbf{DOTA-v2.0}. The results in \textbf{bold} denote the best performance of each column.}
+    \caption{Performance comparisons on the \textbf{FAIR1M-v1.0} dataset. The \textbf{best} and \dunderline{second-best} results are highlighted in \textbf{bold} and \dunderline{underlined}. Results are reported under single-scale training and testing.}
+    %\large
+    %\resizebox{\linewidth}{!}
+    %{
+        %\begin{tabular}{c|ccccc}
+        %    \toprule
+        %    Method & FCOS & O$^2$-RTDETR & O$^2$-RTDETR & O$^2$-DFINE-s & O$^2$-DFINE-m\\
+        %    Backbone &  & R34 & R50 & HG-B0 & HG-B2\\
+        %    \midrule
+        %    Boeing 737 & 10.34 & 41.03 & 39.42 & 39.62 & 41.67\\
+        %    Boeing 747 & 43.54 & 85.87 & 86.87 & 84.28 & 86.43\\
+        %    Boeing 777 & 5.96 & 17.00 & 20.94 & 18.65 & 14.84\\
+        %    Boeing 787 & 13.67 & 49.27 & 57.01 & 50.59 & 53.34\\
+        %    C919 & 11.71 & 23.96 & 26.62 & 25.16 & 28.46\\
+        %    A220 & 3.95 & 49.74 & 47.68 & 50.19 & 53.29\\
+        %    A321 & 15.03 & 63.83 & 67.39 & 64.33 & 71.38\\
+        %    A330 & 14.20 & 67.11 & 67.73 & 68.98 & 69.81\\
+        %    A350 & 13.75 & 70.60 & 78.37 & 71.87 & 77.48\\
+        %    ARJ21 & 10.65 & 37.85 & 34.06 & 33.56 & 27.60\\
+        %    passenger ship & 10.65 & 14.78 & 15.90 & 12.75 & 11.63\\
+        %    motorboat & 46.21 & 62.73 & 65.19 & 60.72 & 64.22\\
+        %    fishing boat & 9.59 & 9.73 & 11.60 & 9.22 & 12.30\\
+        %    tugboat & 19.81 & 30.09 & 34.06 & 29.87 & 38.95\\
+        %    engineering ship & 13.24 & 13.28 & 19.54 & 11.23 & 19.51\\
+        %    liquid cargo ship & 12.92 & 21.69 & 25.25 & 16.72 & 20.35\\
+        %    dry cargo ship & 35.08 & 39.50 & 42.40 & 36.07 & 40.66\\
+        %    warship & 20.75 & 37.26 & 39.51 & 34.54 & 39.21\\
+        %    small car & 42.56 & 66.56 & 68.81 & 63.44 & 66.46\\
+        %    bus & 15.55 & 27.34 & 41.23 & 24.46 & 24.91\\
+        %    cargo truck & 31.72 & 41.78 & 46.21 & 38.66 & 41.90\\
+        %    dump truck & 23.90 & 42.60 & 48.86 & 41.24 & 44.14\\
+        %    van & 34.59 & 63.13 & 66.31 & 60.63 & 63.43\\
+        %    trailer & 12.14 & 7.67 & 11.14 & 7.99 & 8.77\\
+        %    tractor & 1.07 & 1.88 & 3.64 & 4.80 & 8.63\\
+        %    excavator & 7.90 & 16.10 & 16.31 & 15.34 & 12.41\\
+        %    truck tractor & 1.09 & 1.16 & 2.47 & 0.54 & 0.99\\
+        %    basketball court & 23.09 & 44.16 & 47.51 & 44.09 & 48.81\\
+        %    tennis court & 74.76 & 80.83 & 80.36 & 82.14 & 82.67\\
+        %    football field & 49.64 & 57.66 & 59.08 & 58.42 & 63.26\\
+        %    baseball field & 82.90 & 87.07 & 88.49 & 87.37 & 87.05\\
+        %    intersection & 55.14 & 52.52 & 55.19 & 52.50 & 54.84\\
+        %    roundabout & 26.46 & 20.59 & 18.30 & 22.24 & 18.99\\
+        %    bridge & 22.79 & 28.83 & 33.27 & 31.91 & 32.29\\
+        %    \midrule
+        %    mAP & 23.70 & 40.45 & 43.14 & 39.83 & 42.08\\
+        %    \bottomrule
+        %\end{tabular}
+        % }
+        \resizebox{\linewidth}{!}
+        {
+            \begin{tabular}{lcccccccccccccccccccc}
+            \toprule
+            \textbf{Method} & \textbf{Back.} & \textbf{\#P} & \textbf{B737} & \textbf{B747} & \textbf{B777} & \textbf{B787} & \textbf{C919} & \textbf{A220} & \textbf{A321} & \textbf{A330} & \textbf{A350} & \textbf{ARJ21} & \textbf{PS} & \textbf{MB} & \textbf{FB} & \textbf{TB} & \textbf{ES} & \textbf{LCS} & \textbf{DCS} &   \\
+            \midrule
+            %G.V.~\cite{gliding_vertex} & R101 & 41M & 35.43 & 47.88 & 15.67 & 48.32 & 0.01 & 40.11 & 39.31 & 16.54 & 16.56 & 0.01 & 9.12 & 23.34 & 1.23 & 15.67 & 15.43 & 15.32 & 25.43\\
+            RetinaNet~\cite{retinanet} & R101 & 36M & 38.46 & 55.36 & 24.75 & 51.81 & 0.81 & 40.50 & 41.06 & 18.02 & 19.94 & 1.70 & 9.57 & 22.55 & 1.33 & 16.37 & 19.11 & 14.26 & 24.70\\
+            CasRCNN~\cite{cascadercnn} & R101 & 69M & 40.42 & 52.86 & \dunderline{29.07} & 52.47 & 0.00 & 44.37 & 38.35 & 26.55 & 17.54 & 0.00 & 12.10 & 28.84 & 0.71 & 15.35 & 18.53 & 14.63 & 25.15\\
+            FasterRCNN~\cite{faster_rcnn} & R101 & 41M & 36.43 & 50.68 & 22.50 & 51.86 & 0.01 & 47.81 & 43.83 & 17.66 & 19.95 & 0.13 & 9.81 & 28.78 & 1.77 & 17.65 & 16.47 & 16.19 & 27.06\\
+            CHODNet~\cite{fair1m} & R101 & - & 40.23 & 53.39 & \textbf{29.65} & 54.04 & 0.02 & 46.26 & 43.12 & 27.61 & 20.89 & 0.01 & 12.34 & 29.34 & 1.71 & 17.77 & 17.72 & 16.78 & 27.51\\
+            RoITrans~\cite{roi_transformer} & R101 & 55M & 39.58 & 73.56 & 18.32 & \dunderline{56.43} & 0.00 & 47.67 & 49.91 & 27.64 & 31.79 & 0.00 & 14.31 & 28.07 & 1.03 & 14.32 & 15.97 & 18.04 & 26.02 \\
+            O-RCNN~\cite{orientedrcnn} & R50 & 41M & 35.17 & 85.17 & 14.57 & 47.68 & 11.68 & 46.55 & \dunderline{68.18} & 68.60 & 70.21 & 25.32 & 13.77 & 60.42 & 9.10 & \dunderline{36.83} & 11.32 & \dunderline{21.86} & 38.22\\
+            \textbf{O$^2$-RTDETR} & R34 & 31M & \dunderline{41.03} & 85.87 & 17.00 & 49.27 & 23.96 & 49.74 & 63.83 & 67.11 & 70.60 & \textbf{37.85} & \dunderline{14.78} & 62.73 & 9.73 & 30.09 & 13.28 & 21.69 & 39.50   &  \\
+            \textbf{O$^2$-RTDETR} & R50 & 42M &39.42 & \textbf{86.87} & 20.94 & \textbf{57.01} & \dunderline{26.62} & 47.68 & 67.39 & 67.73 & \textbf{78.37} & \dunderline{34.06} & \textbf{15.90} & \textbf{65.19} & \dunderline{11.60} & 34.06 & \textbf{19.54} & \textbf{25.25} & \textbf{42.40} \\
+            \textbf{O$^2$-DFINE-s} & HG-B0 & 10M & 39.54 & 84.20 & 18.60 & 50.56 & 25.15 & \dunderline{50.17} &64.30 & \dunderline{68.89} & 71.81 & 33.49 &12.73& 60.65 & 9.21 & 29.80 & 11.20 & 16.64 & 35.98 \\
+            \textbf{O$^2$-DFINE-m} & HG-B2 & 19M & \textbf{41.56} & \dunderline{86.38} & 14.81 & 53.31 & \textbf{28.37} & \textbf{53.27} & \textbf{71.28} & \textbf{69.75} & \dunderline{77.43} & 27.52 & 11.58 & \dunderline{64.18} & \textbf{12.21} & \textbf{38.86} & \dunderline{19.44} & 20.26 & \dunderline{40.59} \\
+            \midrule
+            \textbf{Method} & \textbf{Back.} & \textbf{\#P} & \textbf{WS}   & \textbf{SC}   & \textbf{Bus}  & \textbf{CT}   & \textbf{DT}   & \textbf{VAN}  & \textbf{TRI}  & \textbf{TRC}  & \textbf{EX}   & \textbf{TT}    & \textbf{BC} & \textbf{TC} & \textbf{FF} & \textbf{BF} & \textbf{IS} & \textbf{RA}  & \textbf{BR}  & \textbf{AP$_{50}$} \\
+            \midrule
+            %G.V.~\cite{gliding_vertex} & R101 & 41M & 13.56 & 66.23 & 23.43 & 46.78 & 36.56 & 53.78 & 14.32 & \textbf{16.39} & 16.92 & 28.91 & 48.41 & 80.31 & 53.46 & 66.93 & 59.41 & 16.25  & 10.39 & 29.92\\
+            RetinaNet~\cite{retinanet} & R101 & 36M & 15.37 & 65.20 & 22.42 & 44.17 & 35.37 & 52.44 & \textbf{19.17} & 1.28 & 17.03 & 28.98 & 50.58 & 81.09 & 52.50 & 66.76 & \textbf{60.13} & 17.41  & 12.58 & 30.67 \\
+            CasRCNN~\cite{cascadercnn} & R101 & 69M & 14.53 & 68.19 & 28.25 & 48.62 & 40.40 & 58.00 & 13.66 & 0.91 & 16.45 & \dunderline{30.27} & 38.81 & 80.29 & 48.21 & 67.90 & 55.67 & 20.35  & 12.62 & 31.18 \\
+            FasterRCNN~\cite{faster_rcnn}& R101 & 41M & 13.16 & 68.42 & 28.37 & \dunderline{51.24} & 43.60 & 57.51 & 15.03 & 3.04 & \dunderline{17.99} & 29.36 & \textbf{58.26} & \textbf{82.67} & 54.50 & 71.71 & 59.86 & 16.92 & 11.87 & 32.12 \\
+            CHODNet~\cite{fair1m} & R101 & - & 13.68 & \textbf{70.12} & 28.38 & 49.11 & 44.02 & 60.78 & 14.48 & 4.96 & 17.60 & 30.09 & 47.91 & 82.11 & 54.10 & 69.97 & \dunderline{59.91} & 19.57 & 14.38 & 32.93\\
+            RoITrans~\cite{roi_transformer} & R101 & 55M & 12.97 & 68.80 & \dunderline{37.41} & \textbf{53.96} & \dunderline{45.68} & 58.39 & \dunderline{16.22} & \dunderline{5.13} & \textbf{22.17} & \textbf{46.71} & \dunderline{54.84} & 80.35 & 56.68 & 69.07 & 58.44 & 18.58 & 31.81 & 35.29\\
+            O-RCNN~\cite{orientedrcnn} & R50 & 41M & 22.67 & 57.62 & 24.40 & 40.84 & 45.20 & 54.01 & 15.46 & 2.37 & 13.55 & 0.24 & 48.18 & 78.45 & \dunderline{60.79} & \dunderline{88.43} & 57.90 & 17.57 & 28.63 & 38.85\\
+             \textbf{O$^2$-RTDETR} & R34 & 31M & 37.26 & 66.56 & 27.34 & 41.78 & 42.60 & 63.13 & 7.67 & 1.88 & 16.10 & 1.16 & 44.16 & 80.83 & 57.66 & 87.07 & 52.52 & \dunderline{20.59} & 28.83 & 40.45\\
+             \textbf{O$^2$-RTDETR} & R50 & 42M & \textbf{39.51} & \dunderline{68.81} & \textbf{41.23} & 46.21 & \textbf{48.86} & \textbf{66.31} & 11.14 & 3.64 & 16.31 & 2.47 & 47.51 & 80.36 & 59.08 & \textbf{88.49} & 55.19 & 18.30 & \textbf{33.27} & \textbf{43.14}\\
+             \textbf{O$^2$-DFINE-s} & HG-B0 & 10M & 34.52 & 63.41 & 24.38 & 38.61 & 41.19 & 60.55 & 7.95 & 4.71 & 15.27 & 0.51 & 44.04 & 82.08 & 58.34 & 87.30 & 52.43 & \textbf{22.18} & 31.89 & 39.77 \\
+             \textbf{O$^2$-DFINE-m} & HG-B2 & 19M & \dunderline{39.13} & 66.37 & 24.86 & 41.82 & 44.08 & \dunderline{63.31} & 8.67 & \textbf{8.61} & 12.38 & 0.95 & 48.74 & \dunderline{82.63} & \textbf{63.21} & 86.98 & 54.74 & 18.97 & \dunderline{32.24} & \dunderline{42.01} \\
+             \bottomrule
+            \end{tabular}
+    }
+    \label{FAIR1M-1.0-result}
+    \end{table*}
+}
+%------------------------FAIR1M1.0-result------------------------------------------------------
+%------------------------FAIR1M1.0-result------------------------------------------------------
+
+
+
+\newcommand{\EachProposedModuleOnDOTA}{
+    \begin{table}[!t]
+        \centering
+        \caption{\textbf{Step-by-step improvements} from the baseline model to O$^2$-DFINE-s, O$^2$-RTDETR-R18, and O$^2$-DEIM-R18 on \textbf{DOTA-v1.0.}}
+    %\renewcommand\arraystretch{1.1}
+    %\resizebox{\linewidth}{!}{
+        \begin{tabular}{l|cccc}
+            \toprule
+            \textbf{O$^2$-DFINE-s}  & \textbf{AP$_{50}$}  & \textbf{\#P} & \textbf{FPS} & \textbf{FLOPs} \\
+            \midrule
+            DFINE-R-s & 72.44 & 10M & 297 & 60G \\
+            + oriented contrastive denoising & 73.72 & 10M & 297 & 60G\\
+            + angle distribution refinement & 75.05 & 10M & 297 & 60G\\
+            + Chamfer distance cost & 76.14 & 10M & 297 & 60G\\
+            \hline \midrule
+            \textbf{O$^2$-RTDETR-R18}  & \textbf{AP$_{50}$}  & \textbf{\#P} & \textbf{FPS} & \textbf{FLOPs} \\
+            \midrule
+            RTDETR-R-R18 & 73.94 & 20M & 233 & 147G \\
+            + oriented contrastive denoising & 75.72 & 20M & 233 & 147G \\
+            + Chamfer distance cost & 77.31 & 20M & 233 & 147G \\
+            \hline \midrule
+            \textbf{O$^2$-DEIM-R18}  & \textbf{AP$_{50}$}  & \textbf{\#P} & \textbf{FPS} & \textbf{FLOPs} \\
+            \midrule
+            O$^2$-RTDETR-R18 & 77.31 & 20M & 233 & 147G \\
+            + Matchability-Aware Loss and \\
+            \quad Multi-scale training  & 79.49 & 20M & 233 & 147G \\
+            \bottomrule
+        \end{tabular}
+    % }
+      \label{EachProposedModuleOnDOTA}
+      \end{table}
+}
+
+
+\newcommand{\AblationCost}{
+    \begin{table}[!htbp]
+        \centering
+        \caption{Ablation study of the \textbf{Chamfer distance cost} for bipartite matching in \textbf{O$^2$-DFINE-s} on \textbf{DOTA-v1.0}.}
+    %\newcolumntype{a}{>{\columncolor{Gray}}c}
+    \resizebox{\linewidth}{!}{
+        \begin{tabular}{ccccc|c}
+        \toprule
+        \textbf{Distance} & \textbf{Cost}   & \textbf{Distance} & \textbf{Loss}   & \textbf{Point}  & \multirow{2}{*}{\textbf{AP$_{50}$}} \\
+        \textbf{Cost}     & \textbf{Weight} & \textbf{Loss}     & \textbf{Weight} & \textbf{Number} &                     \\
+        \midrule
+        KL Divergence &  2.0  & KLD & 2.0  & None  & 73.69\\
+        L1 & 5.0 &  L1 & 5.0 & None  & 74.28 \\
+        Hausdorff & 5.0  & L1 &   5.0   & 4 & 75.05\\
+        \textbf{Chamfer} & \textbf{5.0}  & \textbf{L1} & \textbf{5.0} & \textbf{4} & \textbf{76.14} \\
+        \hline \midrule
+        Chamfer & 3.0  & L1 &   3.0   & 4 & 75.18  \\
+        Chamfer & 4.0  & L1 &   4.0   & 4 & 75.40  \\
+        \textbf{Chamfer} & \textbf{5.0}  & \textbf{L1} & \textbf{5.0} & \textbf{4} & \textbf{76.14} \\
+        Chamfer & 6.0  & L1 &   6.0   & 4 &  75.69 \\
+        \hline \midrule
+        \textbf{Chamfer} & \textbf{5.0}  & \textbf{L1} & \textbf{5.0} & \textbf{4} & \textbf{76.14} \\
+        Chamfer & 5.0  & L1 &   5.0   & 16 & 75.80 \\
+        Chamfer & 5.0  & L1 &   5.0   & 32 & 75.54 \\
+        \bottomrule
+        \end{tabular}
+    }
+        \label{ablation_cost}
+      \end{table}
+}
+
+\newcommand{\AblationDenoise}{
+    \begin{table}[!t]
+        \centering
+        \caption{Ablation study of the \textbf{oriented contrastive denoising} in \textbf{O$^2$-DFINE-s} on \textbf{DOTA-v1.0}.}
+    %\newcolumntype{a}{>{\columncolor{Gray}}c}
+    %\resizebox{\linewidth}{!}{
+          \begin{tabular}{c|cccc}
+          \toprule
+          \multirow{3}{*}{\textbf{Box noise}}    & $\lambda_1 $   & 0.5    &  \textbf{1.0}   &  2.0   \\
+                                                 & $\lambda_2 $   & 1.0    &  \textbf{2.0}   &  4.0   \\
+                                                 & AP$_{50}$      & 75.33  &  \textbf{76.14} &  75.12 \\
+          \hline \midrule
+          \multirow{3}{*}{\textbf{Angle noise}}  & $\lambda_3 $   & 3.0    & 5.0   & 9.0   \\
+                                                 & $\lambda_4 $   & 6.0    & 10.0   & 18.0   \\
+                                                 & AP$_{50}$      & 74.29  & 74.53 & 74.71  \\          
+          \hline \midrule
+          \multirow{5}{*}{\textbf{Geometric noise}}   & $\lambda_1 $  & 0.5   & 1.0   & 2.0   \\
+                                                      & $\lambda_2 $  & 1.0   & 2.0   & 4.0   \\
+                                                      & $\lambda_3 $  & 9.0   & 9.0   & 9.0   \\
+                                                      & $\lambda_4 $  & 18.0   & 18.0   & 18.0   \\
+                                                      & AP$_{50}$     & 75.05 & 75.72 & 74.88 \\  
+          \hline \midrule
+          \multirow{3}{*}{\textbf{Probability noise}}    & $\lambda_5 $  & 0.2 & 0.3 & 0.4 \\
+                                                         & $\lambda_6 $  & 0.4 & 0.6 & 0.8 \\
+                                                         & AP$_{50}$     &  74.32  &  74.56  & 74.49  \\  
+          \hline \midrule
+          \multirow{2}{*}{\textbf{Box noise}}     & Denoising query     &  100   &  \textbf{200}    & 300  \\
+                                                  & AP$_{50}$           &  75.83 &  \textbf{76.14}  & 76.10 \\  
+          \bottomrule
+          \end{tabular}
+    %}
+            \label{ablation_denoise}
+      \end{table}
+}
+
+
+\newcommand{\AblationAngleDistriRefine}{
+    \begin{table}[!t]
+        \centering
+        \caption{Ablation study of \textbf{angle distribution refinement} in \textbf{O$^2$-DFINE-s} on \textbf{DOTA-v1.0}.}
+    %\newcolumntype{a}{>{\columncolor{Gray}}c}
+    %\resizebox{\linewidth}{!}{
+          \begin{tabular}{c|ccccc}
+          \toprule
+          \textbf{Number of bins} $N$ & 8   & 16   & \textbf{32}   & 64 & 128   \\
+          \midrule
+          AP$_{50}$ & 75.78 & 75.86 & \textbf{76.14} & 75.98 & 75.91 \\
+          \hline \midrule
+          $a,c$ \textbf{of} $\mathcal{A}(\cdot)$ \textbf{in}~\eqref{weight_fun} & $\frac{1}{4},\frac{1}{4}$ & $\frac{1}{2},10$ & $\mathbf{\frac{1}{2}},\mathbf{\frac{1}{4}}$ & $\frac{1}{2},\frac{1}{8}$ & $1,\frac{1}{4}$ \\
+          \midrule
+          AP$_{50}$ & 75.27 & 75.64 & \textbf{76.14} & 75.98 & 75.92 \\
+          \bottomrule
+          \end{tabular}
+    % }
+            \label{ablation_angle_distri_refine}
+      \end{table}
+}
+
+
+
+\newcommand{\ComprehensiveResults}{
+    \begin{table*}[t]
+    \caption{Comparisons with different oriented object detectors on \textbf{DIOR-R}, \textbf{DOTA-v1.0}, and \textbf{DOTA-v1.5}.}
+    \centering
+    %\tablestyle{2.5pt}{1}
+    %\renewcommand\arraystretch{1.1}
+    \resizebox{0.99\linewidth}{!}
+    {
+    \begin{tabular}{ccccccccccccccccccc}
+    \toprule[1.02pt]
+    \multirow{2}{*}{\textbf{Methods}} & \multirow{2}{*}{\textbf{\#B}} & \multirow{2}{*}{\textbf{\#Para}} & \multirow{2}{*}{\textbf{GFLOPs}} & \multirow{2}{*}{\textbf{Pre.}} & \multicolumn{4}{c}{\textbf{DIOR-R}} & \multicolumn{4}{c}{\textbf{DOTA-v1.0}} & \multicolumn{4}{c}{\textbf{DOTA-v1.5}} & \multicolumn{2}{c}{\textbf{FAIR1M}} \\     
+    \cmidrule[0.8pt](lr){6-9}\cmidrule[0.8pt](lr){10-13}\cmidrule[0.8pt](lr){14-17}\cmidrule[0.8pt](lr){18-19}
+     & &  & & &\textbf{AP$_{50}$} & \textbf{AP$_{75}$} & \textbf{mAP} & \textbf{FPS}&\textbf{AP$_{50}$} & \textbf{AP$_{75}$} & \textbf{mAP} & \textbf{FPS} &\textbf{AP$_{50}$} & \textbf{AP$_{75}$} & \textbf{mAP} & \textbf{FPS} & \textbf{AP$_{50}$} & \textbf{FPS}\\ 
+    \midrule[0.8pt]
+    Oriented Rep & R50 &  \\
+    DCFL  & R50  \\
+    H2RBox-v2 &  \\
+    COBB-sig &  \\
+    ARS-DETR  & R50 &  \\
+    \textbf{O$^2$-RTDETR} & R34 & 31M & & IN & 68.00 & 46.83 & 45.61 & & 78.13 & 50.81 & 49.36 & & 71.91 & 44.13 & 43.82  \\
+    \textbf{O$^2$-RTDETR} & R50 & 42M & & IN & 71.41 & 49.16 & 48.20 & & 78.45 & 54.25 & 51.14 & & 73.76 & 46.41 & 45.33 \\
+    \textbf{O$^2$-DFINE-s} & HG-B0 & 10M & & IN & 67.01 & 45.10 & 44.35 & & 76.14 & 50.87 & 48.67\\
+    \textbf{O$^2$-DFINE-m} & HG-B2 & 19M & & IN & 69.92 & 47.24 & 46.44 & & 77.76 & 54.04 & 50.58\\
+    \bottomrule[1.02pt]
+    \end{tabular}
+    }
+
+    \label{tab:diorr}
+    \end{table*}
+}
+
+
+\newcommand{\notations}{
+    \begin{table}[!htbp]
+    \centering
+    \renewcommand\arraystretch{1.1}
+    \caption{Nomenclature with related notations.}
+    \resizebox{\linewidth}{!}
+    {
+        \begin{tabular}{c|c}
+        \toprule
+        note & mean \\
+        \midrule
+        $(c_x, c_y, w, h, \theta)$ & oriented boxes\\
+        $\pi$ & radian\\
+        $K$ & number of query \\
+        $l, L$ & number of decoder layers \\
+        $n, N$  & number of bins\\
+        $r$ & external rectangle \\
+        $(c_x,c_y,W_r,H_r)$ & external rectangle \\
+        $\mathcal{D}$ & distance \\
+        $(\alpha,\beta,\gamma,\delta)$ & center to the left,top,right,bottom\\\
+        $\mathcal{A}$ & weight function \\
+        $o$ & vertex offset \\
+        $(\epsilon, \eta)$ & vertex offset \\
+        $\mathcal{P}$ & distribution\\
+        $\mathcal{S},\mathcal{T}$ & point sets \\
+        $\mathcal{C}$ & cost \\
+        $v$ & vertex\\
+        $i$ & number \\
+        
+        \bottomrule
+        \end{tabular}
+    }
+    \label{notations}
+    \end{table}
+}
+
+
+
+

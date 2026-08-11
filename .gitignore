@@ -201,6 +201,10 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
+# Local training artifacts and downloaded backbone weights
+/logs/*/
+/pretrain/
+
 # Marimo
 marimo/_static/
 marimo/_lsp/

@@ -183,9 +183,11 @@ def evaluate(model: torch.nn.Module, criterion: torch.nn.Module, postprocessor, 
 
         outputs = model(samples)
 
-        orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
-
-        results = postprocessor(outputs, orig_target_sizes)
+        if 'rbox' in iou_types:
+            results = postprocessor(outputs, targets)
+        else:
+            orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
+            results = postprocessor(outputs, orig_target_sizes)
 
         # if 'segm' in postprocessor.keys():
         #     target_sizes = torch.stack([t["size"] for t in targets], dim=0)
@@ -213,5 +215,7 @@ def evaluate(model: torch.nn.Module, criterion: torch.nn.Module, postprocessor, 
             stats['coco_eval_bbox'] = coco_evaluator.coco_eval['bbox'].stats.tolist()
         if 'segm' in iou_types:
             stats['coco_eval_masks'] = coco_evaluator.coco_eval['segm'].stats.tolist()
+        if 'rbox' in iou_types:
+            stats['dota_eval_rbox'] = coco_evaluator.stats.tolist()
 
     return stats, coco_evaluator

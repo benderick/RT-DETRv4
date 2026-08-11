@@ -20,3 +20,11 @@ from ._transforms import (
 )
 from .container import Compose
 from .mosaic import Mosaic
+from .rotated_transforms import (
+    RotatedResizePad,
+    RotatedPhotometricDistort,
+    RotatedRandomFlip,
+    RotatedRandomRotate,
+    RotatedSanitizeBoxes,
+    RotatedConvertToTensor,
+)

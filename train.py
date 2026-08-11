@@ -6,6 +6,7 @@ Modified from DEIM: DETR with Improved Matching for Fast Convergence
 Copyright (c) 2024 The DEIM Authors. All Rights Reserved.
 """
 
+import json
 import os
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
@@ -44,7 +45,19 @@ def main(args, ) -> None:
         if 'HGNetv2' in cfg.yaml_cfg:
             cfg.yaml_cfg['HGNetv2']['pretrained'] = False
 
-    print('cfg: ', cfg.__dict__)
+    # print('cfg: ', cfg.__dict__)
+    output_dir = cfg.yaml_cfg["output_dir"]
+
+    # Persist the exact runtime configuration used by this experiment.  The
+    # solver normally creates this directory later, but saving it here also
+    # works for dry-run/configuration inspection modes.
+    if output_dir and dist_utils.is_main_process():
+        os.makedirs(output_dir, exist_ok=True)
+        config_path = os.path.join(output_dir, 'configs.json')
+        with open(config_path, 'w', encoding='utf-8') as handle:
+            json.dump(cfg.__dict__, handle, ensure_ascii=False, indent=2, default=str)
+            handle.write('\n')
+        print(f'config saved to: {config_path}')
 
     solver = TASKS[cfg.yaml_cfg['task']](cfg)
 
@@ -64,9 +77,9 @@ if __name__ == '__main__':
     parser.add_argument('-c', '--config', type=str, required=True)
     parser.add_argument('-r', '--resume', type=str, help='resume from checkpoint')
     parser.add_argument('-t', '--tuning', type=str, help='tuning from checkpoint')
-    parser.add_argument('-d', '--device', type=str, help='device',)
+    parser.add_argument('-d', '--device', type=str, help='device', default='cuda')
     parser.add_argument('--seed', type=int, help='exp reproducibility')
-    parser.add_argument('--use-amp', action='store_true', help='auto mixed precision training')
+    # parser.add_argument('--use-amp', action='store_true', help='auto mixed precision training')
     parser.add_argument('--output-dir', type=str, help='output directoy')
     parser.add_argument('--summary-dir', type=str, help='tensorboard summry')
     parser.add_argument('--test-only', action='store_true', default=False,)

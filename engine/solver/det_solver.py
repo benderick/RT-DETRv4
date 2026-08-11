@@ -234,7 +234,10 @@ class DetSolver(BaseSolver):
                 self.val_dataloader, self.evaluator, self.device)
 
         if self.output_dir:
-            dist_utils.save_on_master(coco_evaluator.coco_eval["bbox"].eval, self.output_dir / "eval.pth")
+            if "bbox" in coco_evaluator.coco_eval:
+                dist_utils.save_on_master(coco_evaluator.coco_eval["bbox"].eval, self.output_dir / "eval.pth")
+            elif hasattr(coco_evaluator, "metrics"):
+                dist_utils.save_on_master(coco_evaluator.metrics, self.output_dir / "eval.pth")
 
         return
 

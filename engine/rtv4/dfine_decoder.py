@@ -130,15 +130,23 @@ class MSDeformableAttention(nn.Module):
             offset_normalizer = torch.tensor(value_spatial_shapes)
             offset_normalizer = offset_normalizer.flip([1]).reshape(1, 1, 1, self.num_levels, 1, 2)
             sampling_locations = reference_points.reshape(bs, Len_q, 1, self.num_levels, 1, 2) + sampling_offsets / offset_normalizer
-        elif reference_points.shape[-1] == 4:
+        elif reference_points.shape[-1] in (4, 5):
             # reference_points [8, 480, None, 1,  4]
             # sampling_offsets [8, 480, 8,    12, 2]
             num_points_scale = self.num_points_scale.to(dtype=query.dtype).unsqueeze(-1)
-            offset = sampling_offsets * num_points_scale * reference_points[:, :, None, :, 2:] * self.offset_scale
+            offset = sampling_offsets * num_points_scale * reference_points[:, :, None, :, 2:4] * self.offset_scale
+            if reference_points.shape[-1] == 5:
+                # Reference angle is normalized by pi. Positive angles are
+                # clockwise in image coordinates (y points down).
+                angle = reference_points[:, :, None, :, 4:5] * math.pi
+                cos_a, sin_a = angle.cos(), angle.sin()
+                dx = offset[..., 0:1] * cos_a - offset[..., 1:2] * sin_a
+                dy = offset[..., 0:1] * sin_a + offset[..., 1:2] * cos_a
+                offset = torch.cat((dx, dy), dim=-1)
             sampling_locations = reference_points[:, :, None, :, :2] + offset
         else:
             raise ValueError(
-                "Last dim of reference_points must be 2 or 4, but get {} instead.".
+                "Last dim of reference_points must be 2, 4 or 5, but get {} instead.".
                 format(reference_points.shape[-1]))
 
         output = self.ms_deformable_attn_core(value, value_spatial_shapes, sampling_locations, attention_weights, self.num_points_list)
