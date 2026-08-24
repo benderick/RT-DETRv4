@@ -34,6 +34,34 @@ def remove_module_prefix(state_dict):
     return new_state_dict
 
 
+def validate_eval_interval(eval_interval):
+    """Return a valid epoch-based validation interval.
+
+    ``bool`` is rejected explicitly even though it is an ``int`` subclass;
+    accepting ``True`` here would hide a malformed YAML setting.
+    """
+
+    if (
+        isinstance(eval_interval, bool)
+        or not isinstance(eval_interval, int)
+        or eval_interval <= 0
+    ):
+        raise ValueError("eval_interval must be a positive integer")
+    return eval_interval
+
+
+def should_evaluate_epoch(epoch, total_epochs, eval_interval):
+    """Whether a zero-based epoch should run validation.
+
+    The interval is expressed in completed epochs.  The final epoch is always
+    evaluated so every completed run has a terminal validation result.
+    """
+
+    interval = validate_eval_interval(eval_interval)
+    completed_epochs = epoch + 1
+    return completed_epochs % interval == 0 or completed_epochs == total_epochs
+
+
 class BaseSolver(object):
     def __init__(self, cfg: BaseConfig) -> None:
         self.cfg = cfg

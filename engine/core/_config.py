@@ -79,9 +79,18 @@ class BaseConfig(object):
         self.seed :int = None
         self.print_freq :int = None
         self.checkpoint_freq :int = 1
+        self.eval_interval :int = 1
         self.output_dir :str = None
         self.summary_dir :str = None
         self.device : str = ''
+
+        # Structured OBB observability.  These fields live in BaseConfig so
+        # YAMLConfig does not silently discard experiment-level settings.
+        self.diagnostics_enabled: bool = False
+        self.diagnostics_train_interval: int = 50
+        self.diagnostics_detailed_image_limit: int = 32
+        self.diagnostics_detailed_epoch_interval: int = 1
+        self.diagnostics_query_topk: int = 50
 
         # distillation: General distillation control switch
         self._teacher_model: nn.Module = None

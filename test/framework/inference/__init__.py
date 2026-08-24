@@ -1,0 +1,1 @@
+"""Stable inference pipeline tests."""

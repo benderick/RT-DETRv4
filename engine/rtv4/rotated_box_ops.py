@@ -114,45 +114,99 @@ def denormalize_rboxes(boxes: Tensor, image_size: Tuple[int, int]) -> Tensor:
     return regularize_rboxes(boxes * factor, normalized_angle=False)
 
 
-def _gaussian_parameters(boxes: Tensor, normalized_angle: bool = True):
-    angle = boxes[..., 4] * ANGLE_PERIOD if normalized_angle else boxes[..., 4]
-    wh = boxes[..., 2:4].clamp_min(1e-7)
-    cos_a, sin_a = torch.cos(angle), torch.sin(angle)
-    rotation = torch.stack(
-        (cos_a, -sin_a, sin_a, cos_a), dim=-1).reshape(*angle.shape, 2, 2)
-    scale = torch.diag_embed(0.5 * wh)
-    covariance = rotation @ scale.square() @ rotation.transpose(-1, -2)
-    eye = torch.eye(2, device=boxes.device, dtype=boxes.dtype)
-    covariance = covariance + eye * 1e-9
-    return boxes[..., :2], covariance
+def _postprocess_distance(
+    distance: Tensor,
+    *,
+    sqrt: bool = True,
+    fun: str = "log1p",
+    tau: float = 1.0,
+) -> Tensor:
+    """Apply the configurable MMRotate Gaussian-distance post-processing.
 
+    ``sqrt`` belongs to KLD itself and is deliberately applied before
+    ``fun``.  O^2's released configurations use
+    ``sqrt=False, fun='log1p', tau=1``. Other choices remain explicit
+    experiment settings rather than implicit historical fallbacks.
+    """
 
-def _postprocess_distance(distance: Tensor, sqrt: bool = True) -> Tensor:
     if sqrt:
         distance = distance.clamp_min(1e-7).sqrt()
-    distance = torch.log1p(distance.clamp_min(0))
-    return 1.0 - 1.0 / (1.0 + distance)
+    if fun == "log1p":
+        distance = torch.log1p(distance)
+    elif fun == "sqrt":
+        distance = distance.clamp_min(1e-7).sqrt()
+    elif fun != "none":
+        raise ValueError(f"Unsupported KLD post-processing function: {fun!r}")
+    return 1.0 - 1.0 / (tau + distance) if tau >= 1.0 else distance
 
 
-def aligned_kld_loss(pred: Tensor, target: Tensor, normalized_angle: bool = True) -> Tensor:
-    """Differentiable KLD geometry loss for aligned rotated boxes."""
+def aligned_kld_loss(
+    pred: Tensor,
+    target: Tensor,
+    normalized_angle: bool = True,
+    *,
+    sqrt: bool = True,
+    fun: str = "log1p",
+    tau: float = 1.0,
+) -> Tensor:
+    """Differentiable KLD geometry loss for aligned rotated boxes.
+
+    The argument names and operation order mirror MMRotate's public
+    ``kld_loss`` so experiments can state their KLD semantics exactly.
+    """
     if pred.shape != target.shape or pred.shape[-1] != 5:
         raise ValueError(f"Aligned KLD expects equal (..., 5) shapes, got {pred.shape}, {target.shape}")
     if pred.numel() == 0:
         return pred.new_empty(pred.shape[:-1])
-    xy_p, sigma_p = _gaussian_parameters(pred, normalized_angle)
-    xy_t, sigma_t = _gaussian_parameters(target, normalized_angle)
-    inv_p = torch.linalg.inv(sigma_p)
-    delta = (xy_p - xy_t).unsqueeze(-1)
-    center = 0.5 * (delta.transpose(-1, -2) @ inv_p @ delta).squeeze(-1).squeeze(-1)
-    trace = 0.5 * torch.diagonal(inv_p @ sigma_t, dim1=-2, dim2=-1).sum(-1)
-    log_det = 0.5 * (torch.linalg.slogdet(sigma_p).logabsdet -
-                     torch.linalg.slogdet(sigma_t).logabsdet)
-    distance = (center + trace + log_det - 1.0).clamp_min(0)
-    return _postprocess_distance(distance)
+    # Evaluate the same Gaussian KLD directly in the predicted box's local
+    # frame.  Forming a rotated covariance and then dividing its adjugate by
+    # ``det(Sigma)`` is algebraically redundant: for a thin rotated box the
+    # determinant becomes a subtraction of nearly equal float32 products and
+    # can round to zero although both side lengths are finite.  The closed
+    # form below has the same values/gradients on ordinary boxes and remains
+    # defined over the full clamped OBB domain.
+    working_dtype = torch.promote_types(pred.dtype, target.dtype)
+    pred = pred.to(dtype=working_dtype)
+    target = target.to(dtype=working_dtype)
+    period = ANGLE_PERIOD if normalized_angle else 1.0
+    pred_angle = pred[..., 4] * period
+    relative_angle = (target[..., 4] - pred[..., 4]) * period
+    pred_wh = pred[..., 2:4].clamp(min=1e-7, max=1e7)
+    target_wh = target[..., 2:4].clamp(min=1e-7, max=1e7)
+    pred_w, pred_h = pred_wh.unbind(-1)
+    target_w, target_h = target_wh.unbind(-1)
+
+    delta = pred[..., :2] - target[..., :2]
+    cos_p, sin_p = pred_angle.cos(), pred_angle.sin()
+    local_x = cos_p * delta[..., 0] + sin_p * delta[..., 1]
+    local_y = -sin_p * delta[..., 0] + cos_p * delta[..., 1]
+    center = 2.0 * (
+        (local_x / pred_w).square() + (local_y / pred_h).square()
+    )
+
+    cos_r, sin_r = relative_angle.cos(), relative_angle.sin()
+    cos2, sin2 = cos_r.square(), sin_r.square()
+    trace = 0.5 * (
+        target_w.square() * (cos2 / pred_w.square() + sin2 / pred_h.square())
+        + target_h.square() * (sin2 / pred_w.square() + cos2 / pred_h.square())
+    )
+    log_det = torch.log(
+        (pred_w * pred_h) / (target_w * target_h)
+    )
+    distance = center + trace + log_det - 1.0
+    return _postprocess_distance(
+        distance, sqrt=sqrt, fun=fun, tau=float(tau))
 
 
-def pairwise_kld_cost(pred: Tensor, target: Tensor, normalized_angle: bool = True) -> Tensor:
+def pairwise_kld_cost(
+    pred: Tensor,
+    target: Tensor,
+    normalized_angle: bool = True,
+    *,
+    sqrt: bool = True,
+    fun: str = "log1p",
+    tau: float = 1.0,
+) -> Tensor:
     """Pairwise KLD cost with shape ``(num_pred, num_target)``."""
     if pred.shape[-1] != 5 or target.shape[-1] != 5:
         raise ValueError("Pairwise KLD expects five-parameter rotated boxes")
@@ -160,17 +214,37 @@ def pairwise_kld_cost(pred: Tensor, target: Tensor, normalized_angle: bool = Tru
         return pred.new_zeros((pred.shape[0], target.shape[0]))
     p = pred[:, None, :].expand(-1, target.shape[0], -1)
     t = target[None, :, :].expand(pred.shape[0], -1, -1)
-    return aligned_kld_loss(p, t, normalized_angle)
+    return aligned_kld_loss(
+        p, t, normalized_angle, sqrt=sqrt, fun=fun, tau=tau)
 
 
-def pairwise_chamfer_cost(pred: Tensor, target: Tensor, normalized_angle: bool = True) -> Tensor:
-    """Bidirectional mean corner Chamfer distance used by O2 matching."""
+CHAMFER_DISTANCE_MODES = ("paper_squared", "released_l2")
+
+
+def pairwise_chamfer_cost(
+    pred: Tensor,
+    target: Tensor,
+    normalized_angle: bool = True,
+    *,
+    distance_mode: str = "paper_squared",
+) -> Tensor:
+    """Bidirectional mean corner Chamfer distance.
+
+    ``paper_squared`` follows O²-DFINE Eq. 10. ``released_l2`` follows the
+    publicly released O²-RTDETR ``ChamferCost``, which uses Euclidean norms.
+    They are intentionally named because the paper and released source differ.
+    """
+    if distance_mode not in CHAMFER_DISTANCE_MODES:
+        raise ValueError(
+            f"Unknown Chamfer distance mode {distance_mode!r}; "
+            f"expected one of {CHAMFER_DISTANCE_MODES}")
     if pred.shape[0] == 0 or target.shape[0] == 0:
         return pred.new_zeros((pred.shape[0], target.shape[0]))
     corners1 = rbox_to_corners(pred, normalized_angle=normalized_angle)
     corners2 = rbox_to_corners(target, normalized_angle=normalized_angle)
-    distances = torch.linalg.vector_norm(
-        corners1[:, None, :, None, :] - corners2[None, :, None, :, :], dim=-1)
+    delta = corners1[:, None, :, None, :] - corners2[None, :, None, :, :]
+    distances = delta.square().sum(dim=-1) if distance_mode == "paper_squared" \
+        else torch.linalg.vector_norm(delta, dim=-1)
     return distances.min(dim=-1).values.mean(dim=-1) + \
         distances.min(dim=-2).values.mean(dim=-1)
 
@@ -182,7 +256,7 @@ def rotated_iou(boxes1: Tensor, boxes2: Tensor, aligned: bool = False,
         from mmcv.ops import box_iou_rotated
     except ImportError as exc:  # pragma: no cover - explicit runtime diagnosis
         raise RuntimeError(
-            "CODrone OBB requires MMCV built with rotated ops (box_iou_rotated).") from exc
+            "OBB geometry requires MMCV built with rotated ops (box_iou_rotated).") from exc
     if boxes1.shape[0] == 0 or boxes2.shape[0] == 0:
         shape = (boxes1.shape[0],) if aligned else (boxes1.shape[0], boxes2.shape[0])
         return boxes1.new_zeros(shape)

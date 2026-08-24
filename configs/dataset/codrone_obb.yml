@@ -4,7 +4,7 @@ num_classes: 12
 remap_mscoco_category: False
 
 evaluator:
-  type: CODroneEvaluator
+  type: DotaOBBEvaluator
   use_07_metric: True
 
 train_dataloader:

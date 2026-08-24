@@ -1,6 +1,9 @@
 print_freq: 100
 output_dir: './logs'
 checkpoint_freq: 12
+# Validate every N completed training epochs. The final epoch is always
+# validated even when the total epoch count is not divisible by this value.
+eval_interval: 1
 
 
 sync_bn: True

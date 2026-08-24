@@ -24,10 +24,16 @@ def _unpack(sample):
 
 def _filter_instances(target, keep):
     count = int(keep.numel())
+    image_metadata = {
+        "image_id", "idx", "orig_size", "size", "scale_factor", "padding",
+        "source_image_size", "tile_origin", "tile_size", "tile_overlap", "tile_step",
+        "effective_image_ratio", "source_padding_ltrb",
+    }
     for key, value in list(target.items()):
-        if torch.is_tensor(value) and value.ndim > 0 and value.shape[0] == count and key not in {
-            "image_id", "idx", "orig_size", "size", "scale_factor", "padding"
-        }:
+        if (
+            torch.is_tensor(value) and value.ndim > 0
+            and value.shape[0] == count and key not in image_metadata
+        ):
             target[key] = value[keep]
     return target
 
@@ -91,16 +97,31 @@ class RotatedPhotometricDistort(nn.Module):
 
     def forward(self, sample):
         image, target, dataset = _unpack(sample)
-        if random.random() < self.p:
+        applied = random.random() < self.p
+        brightness = contrast = saturation = 1.0
+        hue = 0.0
+        order_code = -1
+        if applied:
+            brightness = random.uniform(1 - self.brightness, 1 + self.brightness)
+            contrast = random.uniform(1 - self.contrast, 1 + self.contrast)
+            saturation = random.uniform(1 - self.saturation, 1 + self.saturation)
+            hue = random.uniform(-self.hue, self.hue)
             operations = [
-                lambda im: TF.adjust_brightness(im, random.uniform(1 - self.brightness, 1 + self.brightness)),
-                lambda im: TF.adjust_contrast(im, random.uniform(1 - self.contrast, 1 + self.contrast)),
-                lambda im: TF.adjust_saturation(im, random.uniform(1 - self.saturation, 1 + self.saturation)),
-                lambda im: TF.adjust_hue(im, random.uniform(-self.hue, self.hue)),
+                (1, lambda im: TF.adjust_brightness(im, brightness)),
+                (2, lambda im: TF.adjust_contrast(im, contrast)),
+                (3, lambda im: TF.adjust_saturation(im, saturation)),
+                (4, lambda im: TF.adjust_hue(im, hue)),
             ]
             random.shuffle(operations)
-            for operation in operations:
+            order_code = sum(code * (10 ** index) for index, (code, _) in enumerate(operations))
+            for _, operation in operations:
                 image = operation(image)
+        target["aug_photometric_applied"] = torch.tensor(applied)
+        target["aug_brightness_factor"] = torch.tensor(brightness, dtype=torch.float32)
+        target["aug_contrast_factor"] = torch.tensor(contrast, dtype=torch.float32)
+        target["aug_saturation_factor"] = torch.tensor(saturation, dtype=torch.float32)
+        target["aug_hue_factor"] = torch.tensor(hue, dtype=torch.float32)
+        target["aug_photometric_order_code"] = torch.tensor(order_code, dtype=torch.int64)
         return image, target, dataset
 
 
@@ -117,8 +138,11 @@ class RotatedRandomFlip(nn.Module):
     def forward(self, sample):
         image, target, dataset = _unpack(sample)
         if random.random() >= self.p:
+            target["aug_flip_code"] = torch.tensor(0, dtype=torch.int64)
             return image, target, dataset
         direction = random.choice(self.directions)
+        target["aug_flip_code"] = torch.tensor(
+            {"horizontal": 1, "vertical": 2, "diagonal": 3}[direction], dtype=torch.int64)
         width, height = image.size
         boxes = target["boxes"].clone()
         if direction in {"horizontal", "diagonal"}:
@@ -148,8 +172,12 @@ class RotatedRandomRotate(nn.Module):
     def forward(self, sample):
         image, target, dataset = _unpack(sample)
         if random.random() >= self.p:
+            target["aug_rotation_degrees"] = torch.tensor(0.0, dtype=torch.float32)
+            target["aug_rotation_applied"] = torch.tensor(False)
             return image, target, dataset
         degrees = random.uniform(-self.angle_range, self.angle_range)
+        target["aug_rotation_degrees"] = torch.tensor(degrees, dtype=torch.float32)
+        target["aug_rotation_applied"] = torch.tensor(True)
         image = image.rotate(degrees, resample=Image.Resampling.BILINEAR,
                              expand=False, fillcolor=(self.fill,) * 3)
         boxes = target["boxes"].clone()

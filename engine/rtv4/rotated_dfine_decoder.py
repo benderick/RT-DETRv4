@@ -12,9 +12,37 @@ import torch.nn.init as init
 from ..core import register
 from .dfine_decoder import DFINETransformer, MLP, TransformerDecoder
 from .dfine_utils import distance2bbox, weighting_function
+from .obb.methods.o2.adr import (
+    ADR_COMPONENT_NAMES,
+    adr_to_rbox,
+    distribution_integral,
+    o2_weighting_function,
+)
 from .rotated_denoising import get_rotated_contrastive_denoising_training_group
 from .rotated_box_ops import regularize_rboxes
 from .utils import inverse_sigmoid
+
+
+class O2LocationQualityEstimator(nn.Module):
+    """D-FINE's LQE generalized from four FDR sides to six ADR variables."""
+
+    def __init__(self, components, k, hidden_dim, num_layers, reg_max, act="relu"):
+        super().__init__()
+        self.components = int(components)
+        self.k = int(k)
+        self.reg_max = int(reg_max)
+        self.reg_conf = MLP(
+            self.components * (self.k + 1), hidden_dim, 1, num_layers, act=act)
+        init.constant_(self.reg_conf.layers[-1].bias, 0)
+        init.constant_(self.reg_conf.layers[-1].weight, 0)
+
+    def forward(self, scores, distributions):
+        batch, length, _ = distributions.shape
+        probability = F.softmax(
+            distributions.reshape(batch, length, self.components, self.reg_max + 1), dim=-1)
+        topk = probability.topk(self.k, dim=-1).values
+        statistics = torch.cat((topk, topk.mean(dim=-1, keepdim=True)), dim=-1)
+        return scores + self.reg_conf(statistics.reshape(batch, length, -1))
 
 
 class RotatedTransformerDecoder(TransformerDecoder):
@@ -22,6 +50,7 @@ class RotatedTransformerDecoder(TransformerDecoder):
         self, target, ref_points_unact, memory, spatial_shapes, bbox_head,
         angle_head, score_head, query_pos_head, pre_bbox_head, integral, up,
         reg_scale, attn_mask=None, memory_mask=None, dn_meta=None,
+        use_adr=False, adr_project=None,
     ):
         output = target
         output_detach = pred_corners_undetach = angle_delta_undetach = 0
@@ -47,43 +76,77 @@ class RotatedTransformerDecoder(TransformerDecoder):
                 pre_scores = score_head[0](output)
                 initial_ref = pre_boxes.detach()
 
-            pred_corners = bbox_head[index](output + output_detach) + pred_corners_undetach
-            refined_xywh = distance2bbox(initial_ref[..., :4], integral(pred_corners, project), reg_scale)
-            angle_delta = angle_head[index](output + output_detach) + angle_delta_undetach
-            refined_angle = torch.remainder(initial_ref[..., 4:5] + 0.25 * torch.tanh(angle_delta), 1.0)
-            refined_box = regularize_rboxes(
-                torch.cat((refined_xywh, refined_angle), dim=-1), normalized_angle=True)
+            # Both supported variants retain D-FINE's fixed-anchor,
+            # cumulative-logit refinement semantics.
+            pred_corners = (
+                bbox_head[index](output + output_detach)
+                + pred_corners_undetach
+            )
+            if use_adr:
+                if adr_project is None:
+                    raise RuntimeError("ADR decoder requires its non-uniform distribution project")
+                residuals = distribution_integral(pred_corners, adr_project, components=6)
+                refined_box = regularize_rboxes(
+                    adr_to_rbox(initial_ref, residuals, normalized_angle=True),
+                    normalized_angle=True)
+            else:
+                refined_xywh = distance2bbox(
+                    initial_ref[..., :4], integral(pred_corners, project), reg_scale)
+                angle_delta = angle_head[index](output + output_detach) + angle_delta_undetach
+                refined_angle = torch.remainder(
+                    initial_ref[..., 4:5] + 0.25 * torch.tanh(angle_delta), 1.0)
+                refined_box = regularize_rboxes(
+                    torch.cat((refined_xywh, refined_angle), dim=-1), normalized_angle=True)
 
-            if self.training or index == self.eval_idx:
-                scores = self.lqe_layers[index](score_head[index](output), pred_corners)
+            diagnostic_mode = bool(getattr(self, "diagnostic_mode", False))
+            if self.training or diagnostic_mode or index == self.eval_idx:
+                scores = self.lqe_layers[index](
+                    score_head[index](output), pred_corners
+                )
                 logits_out.append(scores)
                 boxes_out.append(refined_box)
                 corners_out.append(pred_corners)
                 refs_out.append(initial_ref)
-                if not self.training:
+                # Diagnostic evaluation keeps the earlier layer outputs but
+                # must stop at the configured evaluation layer, exactly like
+                # ordinary inference (eval_idx need not be the last layer).
+                if not self.training and index == self.eval_idx:
                     break
             pred_corners_undetach = pred_corners
-            angle_delta_undetach = angle_delta
+            if not use_adr:
+                angle_delta_undetach = angle_delta
             ref_points_detach = refined_box.detach()
             output_detach = output.detach()
-        return (torch.stack(boxes_out), torch.stack(logits_out), torch.stack(corners_out),
-                torch.stack(refs_out), pre_boxes, pre_scores)
+        return (
+            torch.stack(boxes_out),
+            torch.stack(logits_out),
+            torch.stack(corners_out),
+            torch.stack(refs_out),
+            pre_boxes,
+            pre_scores,
+        )
 
 
 @register()
 class RotatedDFINETransformer(DFINETransformer):
-    """Preserve D-FINE FDR for ``cxcywh`` and iteratively refine ``theta``."""
+    """D-FINE OBB decoder supporting direct-angle and O² ADR refinement."""
 
     def __init__(
         self, num_classes=80, hidden_dim=256, num_queries=300,
         feat_channels=(512, 1024, 2048), feat_strides=(8, 16, 32),
         num_levels=3, num_points=4, nhead=8, num_layers=6,
         dim_feedforward=1024, dropout=0.0, activation="relu",
-        num_denoising=100, label_noise_ratio=0.5, box_noise_scale=1.0,
+        num_denoising=200, label_noise_ratio=0.5, box_noise_scale=1.0,
         learn_query_content=False, eval_spatial_size=None, eval_idx=-1,
         eps=1e-2, aux_loss=True, cross_attn_method="default",
         query_select_method="default", reg_max=32, reg_scale=4.0,
         layer_scale=1, mlp_act="relu",
+        adr_a=0.5, adr_c=0.25,
+        refinement_mode="o2_adr",
+        ocd_mode="box", ocd_lambda1=1.0, ocd_lambda2=2.0,
+        ocd_lambda3=9.0, ocd_lambda4=18.0,
+        ocd_lambda5=0.3, ocd_lambda6=0.6,
+        ocd_crowded_policy="strict_budget_random",
     ):
         # Base initialization mutates feat_strides when extra levels are used;
         # keep configuration-owned lists immutable across repeated test builds.
@@ -100,16 +163,53 @@ class RotatedDFINETransformer(DFINETransformer):
             query_select_method=query_select_method, reg_max=reg_max,
             reg_scale=reg_scale, layer_scale=layer_scale, mlp_act=mlp_act)
         self.decoder.__class__ = RotatedTransformerDecoder
+        self.decoder.diagnostic_mode = False
+        refinement_mode = str(refinement_mode)
+        supported_modes = {"direct_angle", "o2_adr"}
+        if refinement_mode not in supported_modes:
+            raise ValueError(
+                f"Unknown refinement_mode {refinement_mode!r}; expected one of "
+                f"{sorted(supported_modes)}")
+        self.refinement_mode = refinement_mode
+        self.use_adr = refinement_mode == "o2_adr"
+        self.ocd_mode = str(ocd_mode)
+        self.ocd_crowded_policy = str(ocd_crowded_policy)
+        self.ocd_lambdas = (
+            float(ocd_lambda1), float(ocd_lambda2), float(ocd_lambda3),
+            float(ocd_lambda4), float(ocd_lambda5), float(ocd_lambda6),
+        )
         hidden_dim = self.hidden_dim
         scaled_dim = round(self.decoder.layer_scale * hidden_dim)
         self.query_pos_head = MLP(5, 2 * hidden_dim, hidden_dim, 2, act=mlp_act)
         self.enc_bbox_head = MLP(hidden_dim, hidden_dim, 5, 3, act=mlp_act)
         self.pre_bbox_head = MLP(hidden_dim, hidden_dim, 5, 3, act=mlp_act)
-        self.dec_angle_head = nn.ModuleList(
-            [MLP(hidden_dim, hidden_dim, 1, 3, act=mlp_act) for _ in range(self.eval_idx + 1)] +
-            [MLP(scaled_dim, scaled_dim, 1, 3, act=mlp_act)
-             for _ in range(self.num_layers - self.eval_idx - 1)])
-        for head in (self.enc_bbox_head, self.pre_bbox_head, *self.dec_angle_head):
+        if self.use_adr:
+            self.dec_bbox_head = nn.ModuleList(
+                [MLP(hidden_dim, hidden_dim, 6 * (self.reg_max + 1), 3, act=mlp_act)
+                 for _ in range(self.eval_idx + 1)] +
+                [MLP(scaled_dim, scaled_dim, 6 * (self.reg_max + 1), 3, act=mlp_act)
+                 for _ in range(self.num_layers - self.eval_idx - 1)])
+            self.dec_angle_head = nn.ModuleList([nn.Identity() for _ in range(self.num_layers)])
+            self.decoder.lqe_layers = nn.ModuleList([
+                O2LocationQualityEstimator(6, 4, 64, 2, self.reg_max, act=activation)
+                for _ in range(self.num_layers)
+            ])
+            self.register_buffer(
+                "adr_project", o2_weighting_function(self.reg_max, adr_a, adr_c))
+        else:
+            # The explicit direct-angle variant preserves the original
+            # parameter names and shapes, so its existing checkpoints still
+            # load strictly without affecting the primary O² architecture.
+            self.dec_angle_head = nn.ModuleList(
+                [MLP(hidden_dim, hidden_dim, 1, 3, act=mlp_act)
+                 for _ in range(self.eval_idx + 1)] +
+                [MLP(scaled_dim, scaled_dim, 1, 3, act=mlp_act)
+                 for _ in range(self.num_layers - self.eval_idx - 1)])
+        initialized_heads = [self.enc_bbox_head, self.pre_bbox_head]
+        initialized_heads.extend(
+            head for head in self.dec_angle_head if hasattr(head, "layers"))
+        initialized_heads.extend(self.dec_bbox_head if self.use_adr else [])
+        for head in initialized_heads:
             init.constant_(head.layers[-1].weight, 0)
             init.constant_(head.layers[-1].bias, 0)
         init.xavier_uniform_(self.query_pos_head.layers[0].weight)
@@ -141,9 +241,41 @@ class RotatedDFINETransformer(DFINETransformer):
 
     def convert_to_deploy(self):
         super().convert_to_deploy()
-        self.dec_angle_head = nn.ModuleList([
-            self.dec_angle_head[i] if i <= self.eval_idx else nn.Identity()
-            for i in range(len(self.dec_angle_head))])
+        if not self.use_adr:
+            self.dec_angle_head = nn.ModuleList([
+                self.dec_angle_head[i] if i <= self.eval_idx else nn.Identity()
+                for i in range(len(self.dec_angle_head))])
+
+    def set_diagnostic_mode(self, enabled=True):
+        """Expose per-decoder-layer predictions during evaluation.
+
+        This is deliberately opt-in so deployment and ordinary inference keep
+        exactly the same output contract and memory footprint.
+        """
+        self.decoder.diagnostic_mode = bool(enabled)
+        for layer in self.decoder.layers:
+            layer.cross_attn.diagnostic_mode = bool(enabled)
+        return self
+
+    def _decode_queries(
+        self,
+        content,
+        refs,
+        memory,
+        spatial_shapes,
+        attention_mask,
+        dn_meta,
+    ):
+        """Run the shared direct-angle/O² decoder."""
+
+        return self.decoder(
+            content, refs, memory, spatial_shapes, self.dec_bbox_head,
+            self.dec_angle_head, self.dec_score_head, self.query_pos_head,
+            self.pre_bbox_head, self.integral, self.up, self.reg_scale,
+            attn_mask=attention_mask, dn_meta=dn_meta,
+            use_adr=self.use_adr,
+            adr_project=self.adr_project if self.use_adr else None,
+        )
 
     def forward(self, feats, targets=None):
         memory, spatial_shapes = self._get_encoder_input(feats)
@@ -151,7 +283,12 @@ class RotatedDFINETransformer(DFINETransformer):
             dn_logits, dn_boxes, attention_mask, dn_meta = \
                 get_rotated_contrastive_denoising_training_group(
                     targets, self.num_classes, self.num_queries, self.denoising_class_embed,
-                    self.num_denoising, self.label_noise_ratio, self.box_noise_scale)
+                    self.num_denoising, self.label_noise_ratio, self.box_noise_scale,
+                    mode=self.ocd_mode,
+                    lambda1=self.ocd_lambdas[0], lambda2=self.ocd_lambdas[1],
+                    lambda3=self.ocd_lambdas[2], lambda4=self.ocd_lambdas[3],
+                    lambda5=self.ocd_lambdas[4], lambda6=self.ocd_lambdas[5],
+                    crowded_policy=self.ocd_crowded_policy)
         else:
             dn_logits = dn_boxes = attention_mask = dn_meta = None
         content, refs, enc_boxes, enc_logits = self._get_decoder_input(
@@ -161,10 +298,10 @@ class RotatedDFINETransformer(DFINETransformer):
         refs = inverse_sigmoid(regularize_rboxes(
             torch.sigmoid(refs), normalized_angle=True).clamp(1e-5, 1 - 1e-5))
         enc_boxes = [regularize_rboxes(boxes, normalized_angle=True) for boxes in enc_boxes]
-        out_boxes, out_logits, out_corners, out_refs, pre_boxes, pre_logits = self.decoder(
-            content, refs, memory, spatial_shapes, self.dec_bbox_head, self.dec_angle_head,
-            self.dec_score_head, self.query_pos_head, self.pre_bbox_head, self.integral,
-            self.up, self.reg_scale, attn_mask=attention_mask, dn_meta=dn_meta)
+        out_boxes, out_logits, out_corners, out_refs, pre_boxes, pre_logits = \
+            self._decode_queries(
+            content, refs, memory, spatial_shapes, attention_mask, dn_meta
+        )
 
         if self.training and dn_meta is not None:
             dn_pre_logits, pre_logits = torch.split(pre_logits, dn_meta["dn_num_split"], dim=1)
@@ -173,13 +310,54 @@ class RotatedDFINETransformer(DFINETransformer):
             dn_out_boxes, out_boxes = torch.split(out_boxes, dn_meta["dn_num_split"], dim=2)
             dn_out_corners, out_corners = torch.split(out_corners, dn_meta["dn_num_split"], dim=2)
             dn_out_refs, out_refs = torch.split(out_refs, dn_meta["dn_num_split"], dim=2)
-
         if self.training:
             result = {"pred_logits": out_logits[-1], "pred_boxes": out_boxes[-1],
                       "pred_corners": out_corners[-1], "ref_points": out_refs[-1],
                       "up": self.up, "reg_scale": self.reg_scale}
+            result["distribution_project"] = (
+                self.adr_project if self.use_adr else
+                weighting_function(self.reg_max, self.up, self.reg_scale))
+            result["distribution_names"] = (
+                ADR_COMPONENT_NAMES if self.use_adr else
+                ("left", "top", "right", "bottom"))
+            result["refinement_kind"] = (
+                "adr" if self.use_adr else "fdr_angle")
+            result["refinement_mode"] = self.refinement_mode
+            if self.use_adr:
+                result["adr_project"] = self.adr_project
         else:
-            return {"pred_logits": out_logits[-1], "pred_boxes": out_boxes[-1]}
+            result = {"pred_logits": out_logits[-1], "pred_boxes": out_boxes[-1]}
+            if bool(getattr(self.decoder, "diagnostic_mode", False)):
+                result["diagnostic_pre_logits"] = pre_logits
+                result["diagnostic_pre_boxes"] = pre_boxes
+                result["diagnostic_layer_logits"] = out_logits
+                result["diagnostic_layer_boxes"] = out_boxes
+                result["diagnostic_layer_refs"] = out_refs
+                result["diagnostic_layer_distributions"] = out_corners
+                result["diagnostic_refinement_kind"] = (
+                    "adr" if self.use_adr else "fdr_angle")
+                result["diagnostic_refinement_mode"] = self.refinement_mode
+                result["diagnostic_distribution_project"] = (
+                    self.adr_project if self.use_adr else
+                    weighting_function(self.reg_max, self.up, self.reg_scale))
+                result["diagnostic_distribution_names"] = (
+                    ADR_COMPONENT_NAMES if self.use_adr else
+                    ("left", "top", "right", "bottom"))
+                active_layers = self.decoder.layers[:len(out_boxes)]
+                if active_layers and all(
+                        hasattr(layer.cross_attn, "last_sampling_locations")
+                        for layer in active_layers):
+                    result["diagnostic_sampling_locations"] = torch.stack([
+                        layer.cross_attn.last_sampling_locations for layer in active_layers])
+                    result["diagnostic_sampling_unrotated_offsets"] = torch.stack([
+                        layer.cross_attn.last_unrotated_offsets for layer in active_layers])
+                    result["diagnostic_sampling_rotated_offsets"] = torch.stack([
+                        layer.cross_attn.last_rotated_offsets for layer in active_layers])
+                    result["diagnostic_sampling_attention_weights"] = torch.stack([
+                        layer.cross_attn.last_attention_weights for layer in active_layers])
+                    result["diagnostic_sampling_points_per_level"] = tuple(
+                        active_layers[0].cross_attn.num_points_list)
+            return result
         if self.aux_loss:
             result["aux_outputs"] = self._set_aux_loss2(
                 out_logits[:-1], out_boxes[:-1], out_corners[:-1], out_refs[:-1],

@@ -1,0 +1,11 @@
+__include__: [
+  './dfine_obb_angle.yml',
+  '../dataset/codrone_obb_tiles.yml',
+]
+
+# Direct-angle-regression control trained/evaluated with the standard tiling
+# protocol. Tile predictions are restored and merged in source-image space.
+output_dir: ./logs/dfine_obb_angle_tile
+
+RotatedPostProcessor:
+  apply_nms: True

@@ -78,7 +78,7 @@ if __name__ == '__main__':
     parser.add_argument('-r', '--resume', type=str, help='resume from checkpoint')
     parser.add_argument('-t', '--tuning', type=str, help='tuning from checkpoint')
     parser.add_argument('-d', '--device', type=str, help='device', default='cuda')
-    parser.add_argument('--seed', type=int, help='exp reproducibility')
+    parser.add_argument('--seed', type=int, help='exp reproducibility', default=42)
     # parser.add_argument('--use-amp', action='store_true', help='auto mixed precision training')
     parser.add_argument('--output-dir', type=str, help='output directoy')
     parser.add_argument('--summary-dir', type=str, help='tensorboard summry')

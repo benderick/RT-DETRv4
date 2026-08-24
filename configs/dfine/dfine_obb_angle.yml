@@ -1,0 +1,153 @@
+__include__: [
+  '../dataset/codrone_obb.yml',
+  '../runtime.yml',
+  '../base/optimizer.yml',
+]
+
+# Explicit direct-angle-regression architectural control. O² is the primary
+# OBB model; this recipe is trained from a fresh run like every public entry.
+output_dir: ./logs/dfine_obb_angle
+diagnostics_enabled: True
+diagnostics_train_interval: 50
+diagnostics_detailed_image_limit: 64
+diagnostics_detailed_epoch_interval: 10
+diagnostics_query_topk: 50
+
+model: RTv4
+criterion: RotatedRTv4Criterion
+postprocessor: RotatedPostProcessor
+eval_spatial_size: [1024, 1024]
+use_focal_loss: True
+num_top_queries: 1200
+
+RTv4:
+  backbone: HGNetv2
+  encoder: HybridEncoder
+  decoder: RotatedDFINETransformer
+
+HGNetv2:
+  name: B2
+  return_idx: [1, 2, 3]
+  freeze_at: -1
+  freeze_norm: False
+  use_lab: True
+  pretrained: True
+  local_model_dir: ./pretrain/hgnetv2/
+
+HybridEncoder:
+  in_channels: [384, 768, 1536]
+  feat_strides: [8, 16, 32]
+  hidden_dim: 256
+  use_encoder_idx: [2]
+  num_encoder_layers: 1
+  nhead: 8
+  dim_feedforward: 1024
+  dropout: 0.0
+  enc_act: gelu
+  expansion: 0.5
+  depth_mult: 0.67
+  act: silu
+
+RotatedDFINETransformer:
+  feat_channels: [256, 256, 256]
+  feat_strides: [8, 16, 32]
+  hidden_dim: 256
+  dim_feedforward: 1024
+  num_levels: 3
+  num_layers: 4
+  eval_idx: -1
+  num_queries: 600
+  num_denoising: 100
+  label_noise_ratio: 0.5
+  box_noise_scale: 1.0
+  refinement_mode: direct_angle
+  ocd_mode: standard
+  # Preserve every GT in crowded images. Actual DN queries may exceed the
+  # requested budget when 2 * max_gt is larger than that budget.
+  ocd_crowded_policy: released_dynamic
+  reg_max: 32
+  reg_scale: 4
+  layer_scale: 1
+  num_points: [3, 6, 3]
+  cross_attn_method: default
+  query_select_method: default
+
+RotatedPostProcessor:
+  num_top_queries: 1200
+  score_threshold: 0.05
+  nms_iou_threshold: 0.1
+  max_detections: 500
+
+RotatedRTv4Criterion:
+  weight_dict: {
+    loss_focal: 1.0,
+    loss_bbox: 5.0,
+    loss_angle: 2.0,
+    loss_kld: 2.0,
+    loss_fgl: 0.15
+  }
+  losses: [focal, boxes, local]
+  alpha: 0.25
+  gamma: 2.0
+  reg_max: 32
+  # D-FINE supervises geometry with the union of assignments observed across
+  # decoder/pre-decoder/encoder layers; classification stays one-to-one.
+  use_uni_set: True
+  # Shared OBB correctness extension: exact squares use their 90-degree
+  # equivalence class and near-squares transition softly to ordinary pi-period
+  # angle supervision. This is not claimed as part of released O^2.
+  angle_loss_mode: square_aware_soft
+  square_anisotropy_threshold: 0.05
+  # Direct-angle control semantics are explicit and intentionally differ from
+  # the paper-aligned O² matcher.
+  kld_sqrt: True
+  kld_fun: log1p
+  kld_tau: 1.0
+  matcher:
+    type: RotatedHungarianMatcher
+    weight_dict: {
+      cost_class: 2.0,
+      cost_bbox: 5.0,
+      cost_angle: 2.0,
+      cost_kld: 2.0,
+      cost_chamfer: 0.5
+    }
+    chamfer_distance: released_l2
+    kld_sqrt: True
+    kld_fun: log1p
+    kld_tau: 1.0
+    alpha: 0.25
+    gamma: 2.0
+
+optimizer:
+  type: AdamW
+  params:
+    - {params: '^(?=.*backbone)(?!.*norm|bn).*$', lr: 0.00002}
+    - {params: '^(?=.*backbone)(?=.*norm|bn).*$', lr: 0.00002, weight_decay: 0.0}
+    - {params: '^(?=.*(?:encoder|decoder))(?=.*(?:norm|bn|bias)).*$', weight_decay: 0.0}
+  lr: 0.0002
+  betas: [0.9, 0.999]
+  weight_decay: 0.0001
+
+epoches: 30
+lr_scheduler:
+  type: MultiStepLR
+  milestones: [24, 28]
+  gamma: 0.1
+lr_warmup_scheduler:
+  type: LinearWarmup
+  warmup_duration: 500
+
+lrsheduler: ~
+clip_max_norm: 0.1
+checkpoint_freq: 2
+print_freq: 100
+use_amp: True
+use_ema: True
+ema:
+  type: ModelEMA
+  decay: 0.9999
+  warmups: 1000
+  start: 0
+sync_bn: False
+find_unused_parameters: False

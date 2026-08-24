@@ -26,6 +26,16 @@ from ..core import register
 __all__ = ['DFINETransformer']
 
 
+def rotate_sampling_offsets(offsets, normalized_angles):
+    """Rotate local cross-attention offsets by half-turn normalized angles."""
+
+    angle = normalized_angles * math.pi
+    cos_a, sin_a = angle.cos(), angle.sin()
+    dx = offsets[..., 0:1] * cos_a - offsets[..., 1:2] * sin_a
+    dy = offsets[..., 0:1] * sin_a + offsets[..., 1:2] * cos_a
+    return torch.cat((dx, dy), dim=-1)
+
+
 class MLP(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim, num_layers, act='relu'):
         super().__init__()
@@ -135,19 +145,25 @@ class MSDeformableAttention(nn.Module):
             # sampling_offsets [8, 480, 8,    12, 2]
             num_points_scale = self.num_points_scale.to(dtype=query.dtype).unsqueeze(-1)
             offset = sampling_offsets * num_points_scale * reference_points[:, :, None, :, 2:4] * self.offset_scale
+            unrotated_offset = offset
             if reference_points.shape[-1] == 5:
                 # Reference angle is normalized by pi. Positive angles are
                 # clockwise in image coordinates (y points down).
                 angle = reference_points[:, :, None, :, 4:5] * math.pi
-                cos_a, sin_a = angle.cos(), angle.sin()
-                dx = offset[..., 0:1] * cos_a - offset[..., 1:2] * sin_a
-                dy = offset[..., 0:1] * sin_a + offset[..., 1:2] * cos_a
-                offset = torch.cat((dx, dy), dim=-1)
+                offset = rotate_sampling_offsets(offset, angle / math.pi)
             sampling_locations = reference_points[:, :, None, :, :2] + offset
         else:
             raise ValueError(
                 "Last dim of reference_points must be 2, 4 or 5, but get {} instead.".
                 format(reference_points.shape[-1]))
+
+        if bool(getattr(self, "diagnostic_mode", False)):
+            self.last_unrotated_offsets = (
+                unrotated_offset.detach() if reference_points.shape[-1] in (4, 5) else None)
+            self.last_rotated_offsets = (
+                offset.detach() if reference_points.shape[-1] == 5 else None)
+            self.last_sampling_locations = sampling_locations.detach()
+            self.last_attention_weights = attention_weights.detach()
 
         output = self.ms_deformable_attn_core(value, value_spatial_shapes, sampling_locations, attention_weights, self.num_points_list)
 
@@ -799,6 +815,17 @@ class DFINETransformer(nn.Module):
         # this is a workaround to make torchscript happy, as torchscript
         # doesn't support dictionary with non-homogeneous values, such
         # as a dict having both a Tensor and a list.
-        return [{'pred_logits': a, 'pred_boxes': b, 'pred_corners': c, 'ref_points': d,
-                     'teacher_corners': teacher_corners, 'teacher_logits': teacher_logits}
-                for a, b, c, d in zip(outputs_class, outputs_coord, outputs_corners, outputs_ref)]
+        results = [
+            {
+                'pred_logits': a,
+                'pred_boxes': b,
+                'pred_corners': c,
+                'ref_points': d,
+                'teacher_corners': teacher_corners,
+                'teacher_logits': teacher_logits,
+            }
+            for a, b, c, d in zip(
+                outputs_class, outputs_coord, outputs_corners, outputs_ref
+            )
+        ]
+        return results

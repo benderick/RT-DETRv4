@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run every CODrone OBB test without third-party test dependencies."""
+"""Run the stable OBB framework and O²-specific tests."""
 
 import sys
 import unittest

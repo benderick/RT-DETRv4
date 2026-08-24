@@ -15,4 +15,3 @@ from .coco_utils import get_coco_api_from_dataset
 from .voc_detection import VOCDetection
 from .voc_eval import VOCEvaluator
 from .codrone_dataset import CODroneDetection, CODRONE_CLASSES
-from .codrone_eval import CODroneEvaluator

@@ -1,0 +1,65 @@
+__include__: [
+  './dfine_obb_angle.yml',
+]
+
+# Primary paper-derived O²-DFINE model. The public O² repository does not
+# expose the DFINE/ADR decoder, so this configuration deliberately records
+# which semantics follow the paper and which follow released O²-RTDETR code.
+output_dir: ./logs/dfine_obb_o2
+
+RotatedDFINETransformer:
+  refinement_mode: o2_adr
+  num_denoising: 200
+  ocd_mode: box
+  ocd_crowded_policy: released_dynamic
+  ocd_lambda1: 1.0
+  ocd_lambda2: 2.0
+  ocd_lambda3: 9.0
+  ocd_lambda4: 18.0
+  ocd_lambda5: 0.3
+  ocd_lambda6: 0.6
+  reg_max: 32
+  adr_a: 0.5
+  adr_c: 0.25
+
+# O²/DETR is a set predictor.  The frozen 2000-image acceptance audit shows
+# that overlap NMS is unnecessary on full-image inference and slightly lowers
+# the primary metric (0.2324 -> 0.2315).  Tile variants override this because
+# local/global duplicate removal is part of partition merging.
+RotatedPostProcessor:
+  apply_nms: False
+
+RotatedRTv4Criterion:
+  # D-FINE source semantics: decoder-wide geometric union matching.
+  use_uni_set: True
+  # Released O² configs use KLD(log1p, tau=1, sqrt=False).
+  kld_sqrt: False
+  kld_fun: log1p
+  kld_tau: 1.0
+  # Reproduction mode: retain the paper's ordinary pi-periodic angle L1.
+  # Square-aware variants belong to later local ideas, not to the O² baseline.
+  angle_loss_mode: periodic_pi
+  square_anisotropy_threshold: 0.0
+  weight_dict:
+    loss_focal: 1.0
+    loss_bbox: 5.0
+    loss_angle: 5.0
+    loss_kld: 2.0
+    loss_fgl: 0.15
+  matcher:
+    type: RotatedHungarianMatcher
+    weight_dict:
+      cost_class: 2.0
+      cost_bbox: 0.0
+      cost_angle: 0.0
+      cost_kld: 2.0
+      cost_chamfer: 5.0
+    # O²-DFINE Eq. 10 specifies squared corner distance. The released
+    # O²-RTDETR ChamferCost instead uses ordinary L2; choose the paper here
+    # because ADR/DFINE is reconstructed from the paper, not released source.
+    chamfer_distance: paper_squared
+    kld_sqrt: False
+    kld_fun: log1p
+    kld_tau: 1.0
+    alpha: 0.25
+    gamma: 2.0

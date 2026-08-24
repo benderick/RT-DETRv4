@@ -1,0 +1,10 @@
+__include__: [
+  './dfine_obb_o2.yml',
+  '../dataset/codrone_obb_tiles.yml',
+]
+
+# Primary O² model trained/evaluated with the standard tiling protocol.
+output_dir: ./logs/dfine_obb_o2_tile
+
+RotatedPostProcessor:
+  apply_nms: True

@@ -12,7 +12,7 @@ import torch
 import torch.nn as nn
 
 from ..misc import dist_utils
-from ._solver import BaseSolver
+from ._solver import BaseSolver, should_evaluate_epoch, validate_eval_interval
 from .clas_engine import train_one_epoch, evaluate
 
 
@@ -22,6 +22,7 @@ class ClasSolver(BaseSolver):
         print("Start training")
         self.train()
         args = self.cfg
+        eval_interval = validate_eval_interval(args.eval_interval)
 
         n_parameters = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
         print('Number of params:', n_parameters)
@@ -54,8 +55,12 @@ class ClasSolver(BaseSolver):
                 for checkpoint_path in checkpoint_paths:
                     dist_utils.save_on_master(self.state_dict(epoch), checkpoint_path)
 
-            module = self.ema.module if self.ema else self.model
-            test_stats = evaluate(module, self.criterion, self.val_dataloader, self.device)
+            test_stats = {}
+            if should_evaluate_epoch(epoch, args.epoches, eval_interval):
+                module = self.ema.module if self.ema else self.model
+                test_stats = evaluate(
+                    module, self.criterion, self.val_dataloader, self.device
+                )
 
             log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
                          **{f'test_{k}': v for k, v in test_stats.items()},

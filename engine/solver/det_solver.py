@@ -15,9 +15,10 @@ import torch
 
 from ..misc import dist_utils, stats
 
-from ._solver import BaseSolver
+from ._solver import BaseSolver, should_evaluate_epoch, validate_eval_interval
 from .det_engine import train_one_epoch, evaluate
 from ..optim.lr_scheduler import FlatCosineLRScheduler
+from ..diagnostics import OBBDiagnostics
 
 
 class DetSolver(BaseSolver):
@@ -25,10 +26,23 @@ class DetSolver(BaseSolver):
     def fit(self, ):
         self.train()
         args = self.cfg
+        self.diagnostics = OBBDiagnostics(
+            args, self.output_dir, model=getattr(self, "model", None)
+        )
+        try:
+            return self._fit_with_diagnostics(args)
+        finally:
+            self.diagnostics.close()
 
+    def _fit_with_diagnostics(self, args):
+        eval_interval = validate_eval_interval(args.eval_interval)
         n_parameters, model_stats = stats(self.cfg)
         print(model_stats)
         print("-"*42 + "Start training" + "-"*43)
+        print(
+            f"Validation interval: every {eval_interval} completed epoch(s); "
+            "the final epoch is always evaluated"
+        )
 
         self.self_lr_scheduler = False
         if args.lrsheduler is not None:
@@ -51,7 +65,10 @@ class DetSolver(BaseSolver):
                 self.postprocessor,
                 self.val_dataloader,
                 self.evaluator,
-                self.device
+                self.device,
+                diagnostics=self.diagnostics,
+                epoch=self.last_epoch,
+                model_source="ema" if self.ema else "model",
             )
             for k in test_stats:
                 best_stat['epoch'] = self.last_epoch
@@ -90,7 +107,9 @@ class DetSolver(BaseSolver):
                 lr_warmup_scheduler=self.lr_warmup_scheduler,
                 writer=self.writer,
                 teacher_model=self.teacher_model, # NEW: Pass teacher model to train_one_epoch
+                diagnostics=self.diagnostics,
             )
+            self.diagnostics.record_train_epoch(epoch, train_stats)
 
             if not self.self_lr_scheduler:  # update by epoch 
                 if self.lr_warmup_scheduler is None or self.lr_warmup_scheduler.finished():
@@ -148,55 +167,70 @@ class DetSolver(BaseSolver):
                 for checkpoint_path in checkpoint_paths:
                     dist_utils.save_on_master(self.state_dict(), checkpoint_path)
 
-            module = self.ema.module if self.ema else self.model
-            test_stats, coco_evaluator = evaluate(
-                module,
-                self.criterion,
-                self.postprocessor,
-                self.val_dataloader,
-                self.evaluator,
-                self.device
+            test_stats = {}
+            coco_evaluator = None
+            # A staged D-FINE run reloads ``best_stg1.pth`` at stop_epoch, so
+            # the preceding epoch is also a mandatory validation boundary.
+            # Ordinary OBB recipes use the regular interval/final-epoch rule.
+            stage_boundary = (
+                epoch + 1 == self.train_dataloader.collate_fn.stop_epoch
             )
+            if (
+                should_evaluate_epoch(epoch, args.epoches, eval_interval)
+                or stage_boundary
+            ):
+                module = self.ema.module if self.ema else self.model
+                test_stats, coco_evaluator = evaluate(
+                    module,
+                    self.criterion,
+                    self.postprocessor,
+                    self.val_dataloader,
+                    self.evaluator,
+                    self.device,
+                    diagnostics=self.diagnostics,
+                    epoch=epoch,
+                    model_source="ema" if self.ema else "model",
+                )
 
-            # TODO
-            for k in test_stats:
-                if self.writer and dist_utils.is_main_process():
-                    for i, v in enumerate(test_stats[k]):
-                        self.writer.add_scalar(f'Test/{k}_{i}'.format(k), v, epoch)
+                # TODO
+                for k in test_stats:
+                    if self.writer and dist_utils.is_main_process():
+                        for i, v in enumerate(test_stats[k]):
+                            self.writer.add_scalar(f'Test/{k}_{i}'.format(k), v, epoch)
 
-                if k in best_stat:
-                    best_stat['epoch'] = epoch if test_stats[k][0] > best_stat[k] else best_stat['epoch']
-                    best_stat[k] = max(best_stat[k], test_stats[k][0])
-                else:
-                    best_stat['epoch'] = epoch
-                    best_stat[k] = test_stats[k][0]
+                    if k in best_stat:
+                        best_stat['epoch'] = epoch if test_stats[k][0] > best_stat[k] else best_stat['epoch']
+                        best_stat[k] = max(best_stat[k], test_stats[k][0])
+                    else:
+                        best_stat['epoch'] = epoch
+                        best_stat[k] = test_stats[k][0]
 
-                if best_stat[k] > top1:
-                    best_stat_print['epoch'] = epoch
-                    top1 = best_stat[k]
-                    if self.output_dir:
+                    if best_stat[k] > top1:
+                        best_stat_print['epoch'] = epoch
+                        top1 = best_stat[k]
+                        if self.output_dir:
+                            if epoch >= self.train_dataloader.collate_fn.stop_epoch:
+                                dist_utils.save_on_master(self.state_dict(), self.output_dir / 'best_stg2.pth')
+                            else:
+                                dist_utils.save_on_master(self.state_dict(), self.output_dir / 'best_stg1.pth')
+
+                    best_stat_print[k] = max(best_stat[k], top1)
+                    print(f'best_stat: {best_stat_print}')  # global best
+
+                    if best_stat['epoch'] == epoch and self.output_dir:
                         if epoch >= self.train_dataloader.collate_fn.stop_epoch:
-                            dist_utils.save_on_master(self.state_dict(), self.output_dir / 'best_stg2.pth')
+                            if test_stats[k][0] > top1:
+                                top1 = test_stats[k][0]
+                                dist_utils.save_on_master(self.state_dict(), self.output_dir / 'best_stg2.pth')
                         else:
+                            top1 = max(test_stats[k][0], top1)
                             dist_utils.save_on_master(self.state_dict(), self.output_dir / 'best_stg1.pth')
 
-                best_stat_print[k] = max(best_stat[k], top1)
-                print(f'best_stat: {best_stat_print}')  # global best
-
-                if best_stat['epoch'] == epoch and self.output_dir:
-                    if epoch >= self.train_dataloader.collate_fn.stop_epoch:
-                        if test_stats[k][0] > top1:
-                            top1 = test_stats[k][0]
-                            dist_utils.save_on_master(self.state_dict(), self.output_dir / 'best_stg2.pth')
-                    else:
-                        top1 = max(test_stats[k][0], top1)
-                        dist_utils.save_on_master(self.state_dict(), self.output_dir / 'best_stg1.pth')
-
-                elif epoch >= self.train_dataloader.collate_fn.stop_epoch:
-                    best_stat = {'epoch': -1, }
-                    self.ema.decay -= 0.0001
-                    self.load_resume_state(str(self.output_dir / 'best_stg1.pth'))
-                    print(f'Refresh EMA at epoch {epoch} with decay {self.ema.decay}')
+                    elif epoch >= self.train_dataloader.collate_fn.stop_epoch:
+                        best_stat = {'epoch': -1, }
+                        self.ema.decay -= 0.0001
+                        self.load_resume_state(str(self.output_dir / 'best_stg1.pth'))
+                        print(f'Refresh EMA at epoch {epoch} with decay {self.ema.decay}')
 
 
             log_stats = {
@@ -228,19 +262,26 @@ class DetSolver(BaseSolver):
 
     def val(self, ):
         self.eval()
+        self.diagnostics = OBBDiagnostics(
+            self.cfg, self.output_dir, model=getattr(self, "model", None)
+        )
+        try:
+            return self._val_with_diagnostics()
+        finally:
+            self.diagnostics.close()
 
+    def _val_with_diagnostics(self):
         module = self.ema.module if self.ema else self.model
         test_stats, coco_evaluator = evaluate(module, self.criterion, self.postprocessor,
-                self.val_dataloader, self.evaluator, self.device)
+                self.val_dataloader, self.evaluator, self.device,
+                diagnostics=self.diagnostics, epoch=self.last_epoch,
+                model_source="ema" if self.ema else "model")
 
         if self.output_dir:
             if "bbox" in coco_evaluator.coco_eval:
                 dist_utils.save_on_master(coco_evaluator.coco_eval["bbox"].eval, self.output_dir / "eval.pth")
             elif hasattr(coco_evaluator, "metrics"):
                 dist_utils.save_on_master(coco_evaluator.metrics, self.output_dir / "eval.pth")
-
-        return
-
 
     def state_dict(self):
         """State dict, train/eval"""
