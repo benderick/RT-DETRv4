@@ -1,0 +1,17 @@
+__include__: [
+  '../../dfine/dfine_obb_angle.yml',
+  '../../dataset/uav_rod_obb.yml',
+]
+
+output_dir: ./logs/uav_rod/dfine_obb_angle
+
+# The official split contains at most 104 cars per image. Three hundred set
+# queries retain comfortable capacity without CODrone's dense-scene override.
+num_top_queries: 300
+
+RotatedDFINETransformer:
+  num_queries: 300
+
+RotatedPostProcessor:
+  num_top_queries: 300
+  max_detections: 300

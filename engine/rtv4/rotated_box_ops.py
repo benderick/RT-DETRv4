@@ -226,7 +226,7 @@ def pairwise_chamfer_cost(
     target: Tensor,
     normalized_angle: bool = True,
     *,
-    distance_mode: str = "paper_squared",
+    distance_mode: str = "released_l2",
 ) -> Tensor:
     """Bidirectional mean corner Chamfer distance.
 

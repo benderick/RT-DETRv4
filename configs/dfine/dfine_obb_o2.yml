@@ -9,7 +9,9 @@ output_dir: ./logs/dfine_obb_o2
 
 RotatedDFINETransformer:
   refinement_mode: o2_adr
-  num_denoising: 200
+  # D-FINE/O² group-base convention: positive/negative expansion produces
+  # approximately 200 actual DN queries from this value of 100.
+  num_denoising: 100
   ocd_mode: box
   ocd_crowded_policy: released_dynamic
   ocd_lambda1: 1.0
@@ -54,10 +56,11 @@ RotatedRTv4Criterion:
       cost_angle: 0.0
       cost_kld: 2.0
       cost_chamfer: 5.0
-    # O²-DFINE Eq. 10 specifies squared corner distance. The released
-    # O²-RTDETR ChamferCost instead uses ordinary L2; choose the paper here
-    # because ADR/DFINE is reconstructed from the paper, not released source.
-    chamfer_distance: paper_squared
+    # The manuscript equation writes squared distance, while every released
+    # O² configuration obtains its reported results with ordinary L2 in
+    # ChamferCost. Reproduction defaults to the executable source semantics;
+    # paper_squared remains available only for an explicitly named study.
+    chamfer_distance: released_l2
     kld_sqrt: False
     kld_fun: log1p
     kld_tau: 1.0

@@ -12,7 +12,7 @@
 | `direct_angle` | FDR `cxcywh` + 标量周期角度 | 4 个 FDR 分布 |
 | `o2_adr` | O² ADR 解码 OBB | 6 个 ADR 分布 |
 
-公开配置只有：
+稳定模型定义只有：
 
 ```text
 configs/dfine/dfine_obb_angle.yml
@@ -21,8 +21,10 @@ configs/dfine/dfine_obb_angle_tile.yml
 configs/dfine/dfine_obb_o2_tile.yml
 ```
 
-配置名描述模型差异，不编码数据集名、backbone 尺寸、tile 尺寸或输入分辨率。
-`_tile` 配置复用同一模型，只替换数据和合并求值协议。
+这些配置名描述模型差异，不编码数据集名、backbone 尺寸、tile 尺寸或输入分辨率。
+`_tile` 配置复用同一模型，只替换数据和合并求值协议。新增数据集不复制模型实现；
+完整可运行的数据集绑定放在 `configs/experiments/<dataset>/`，通过 include 组合稳定
+模型定义与 `configs/dataset/` 中的数据协议。
 
 ## 2. 目录职责
 
@@ -36,6 +38,7 @@ engine/rtv4/obb/methods/o2/       # O² 私有 ADR 原语
 
 configs/dataset/                  # 数据协议
 configs/dfine/                    # 稳定训练入口
+configs/experiments/<dataset>/    # 数据集与稳定模型的可运行绑定
 docs/framework/                   # 公共契约与坐标规范
 docs/datasets/<name>/             # 数据集说明
 docs/research/o2/                 # O² 复现资料与审计

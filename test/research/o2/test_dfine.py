@@ -10,7 +10,7 @@ from engine.rtv4 import (
     RotatedHungarianMatcher,
     RotatedRTv4Criterion,
 )
-from engine.rtv4.dfine_decoder import rotate_sampling_offsets
+from engine.rtv4.dfine_decoder import MSDeformableAttention, rotate_sampling_offsets
 from engine.rtv4.obb.methods.o2.adr import (
     adr_target_residual,
     adr_to_rbox,
@@ -99,7 +99,7 @@ class O2ADRTest(unittest.TestCase):
         matcher = RotatedHungarianMatcher({
             "cost_class": 2, "cost_bbox": 0, "cost_angle": 0,
             "cost_kld": 2, "cost_chamfer": 5,
-        }, chamfer_distance="paper_squared")
+        }, chamfer_distance="released_l2")
         criterion = RotatedRTv4Criterion(
             matcher,
             {"loss_focal": 1, "loss_bbox": 5, "loss_angle": 5,
@@ -114,6 +114,32 @@ class O2ADRTest(unittest.TestCase):
         instability = criterion.last_diagnostics["assignment_instability"]
         self.assertEqual(instability["decoder_layer_count"], 2)
         self.assertEqual(instability["ground_truth_count"], 2)
+
+    def test_decoder_layers_accumulate_six_distribution_logits(self):
+        model = _tiny_o2_model(num_denoising=0).eval().set_diagnostic_mode(True)
+        first = torch.linspace(
+            -0.3, 0.4, model.dec_bbox_head[0].layers[-1].out_features)
+        second = torch.linspace(
+            0.2, -0.1, model.dec_bbox_head[1].layers[-1].out_features)
+        with torch.no_grad():
+            model.dec_bbox_head[0].layers[-1].bias.copy_(first)
+            model.dec_bbox_head[1].layers[-1].bias.copy_(second)
+        features = [
+            torch.randn(1, 32, 8, 8),
+            torch.randn(1, 32, 4, 4),
+            torch.randn(1, 32, 2, 2),
+        ]
+        outputs = model(features)
+        logits = outputs["diagnostic_layer_distributions"]
+        torch.testing.assert_close(logits[0], first.expand_as(logits[0]))
+        torch.testing.assert_close(
+            logits[1], (first + second).expand_as(logits[1]))
+        self.assertEqual(
+            outputs["diagnostic_adr_geometry_contract"],
+            "dfine4_plus_vertex2_equal_diagonal",
+        )
+        self.assertEqual(
+            outputs["diagnostic_layer_adr_residuals"].shape[-1], 6)
 
     def test_exact_instability_fraction(self):
         targets = [{"labels": torch.tensor([0, 0, 0])}]
@@ -169,8 +195,23 @@ class O2MatchingAndDenoisingTest(unittest.TestCase):
         target = [{"labels": torch.tensor([0, 1]), "boxes": box[0]}]
         _, query_boxes, _, meta = get_rotated_contrastive_denoising_training_group(
             target, 3, 20, embedding, num_denoising=10, mode="geometric")
-        self.assertLessEqual(query_boxes.shape[1], 10)
+        self.assertEqual(query_boxes.shape[1], 20)
         self.assertEqual(meta["dn_noise_mode"], "geometric")
+        self.assertEqual(meta["dn_group_base_count"], 10)
+
+    def test_ocd_box_noise_keeps_numeric_angle_through_query_generation(self):
+        torch.manual_seed(11)
+        boxes = torch.tensor([
+            [.5, .5, .4, .2, .0],
+            [.5, .5, .4, .2, .25],
+        ])
+        embedding = torch.nn.Embedding(4, 16, padding_idx=3)
+        _, query_boxes, _, meta = get_rotated_contrastive_denoising_training_group(
+            [{"labels": torch.tensor([0, 1]), "boxes": boxes}],
+            3, 20, embedding, num_denoising=10, mode="box")
+        observed = query_boxes.sigmoid()[0, :, 4]
+        expected_group = boxes[:, 4].repeat(2)
+        torch.testing.assert_close(observed, expected_group.repeat(meta["dn_num_group"]))
 
 
 class O2RotatedAttentionTest(unittest.TestCase):
@@ -180,6 +221,39 @@ class O2RotatedAttentionTest(unittest.TestCase):
         rotated = rotate_sampling_offsets(offset, quarter_turn)
         expected = torch.tensor([[[[[0.0, 1.0]]]]])
         torch.testing.assert_close(rotated, expected, atol=1e-6, rtol=1e-6)
+
+        arbitrary = torch.tensor([[[[[2.0, -3.0]]]]])
+        rotated_arbitrary = rotate_sampling_offsets(arbitrary, quarter_turn)
+        torch.testing.assert_close(
+            rotated_arbitrary, torch.tensor([[[[[3.0, 2.0]]]]]),
+            atol=1e-6, rtol=1e-6)
+        torch.testing.assert_close(
+            torch.linalg.vector_norm(rotated_arbitrary, dim=-1),
+            torch.linalg.vector_norm(arbitrary, dim=-1),
+        )
+
+    def test_dfine_scales_in_local_box_axes_then_rotates_the_offset_vector(self):
+        attention = MSDeformableAttention(
+            embed_dim=8, num_heads=1, num_levels=1, num_points=1)
+        attention.diagnostic_mode = True
+        with torch.no_grad():
+            attention.sampling_offsets.weight.zero_()
+            attention.sampling_offsets.bias.copy_(torch.tensor([1.0, 0.0]))
+        query = torch.zeros(1, 1, 8)
+        reference = torch.tensor([[[[.5, .5, .4, .2, .5]]]])
+        value = (torch.zeros(1, 1, 8, 1),)
+        attention(query, reference, value, [[1, 1]])
+        # Default offset_scale=.5: local (1,0) first becomes (.2,0)
+        # from width=.4, then theta=pi/2 rotates it to (0,.2).
+        torch.testing.assert_close(
+            attention.last_unrotated_offsets,
+            torch.tensor([[[[[.2, 0.]]]]]), atol=1e-6, rtol=0)
+        torch.testing.assert_close(
+            attention.last_rotated_offsets,
+            torch.tensor([[[[[0., .2]]]]]), atol=1e-6, rtol=0)
+        torch.testing.assert_close(
+            attention.last_sampling_locations,
+            torch.tensor([[[[[.5, .7]]]]]), atol=1e-6, rtol=0)
 
     def test_diagnostic_mode_exposes_sampling_evidence(self):
         model = _tiny_o2_model(num_denoising=0).eval().set_diagnostic_mode(True)
@@ -201,14 +275,14 @@ class O2ConfigurationTest(unittest.TestCase):
             ("dfine_obb_angle.yml", "direct_angle", "standard", 100, 0.5,
              "released_l2", True,
              "DotaOBBEvaluator"),
-            ("dfine_obb_o2.yml", "o2_adr", "box", 200, 5.0,
-             "paper_squared", False,
+            ("dfine_obb_o2.yml", "o2_adr", "box", 100, 5.0,
+             "released_l2", False,
              "DotaOBBEvaluator"),
             ("dfine_obb_angle_tile.yml", "direct_angle", "standard", 100, 0.5,
              "released_l2", True,
              "MergedDotaOBBEvaluator"),
-            ("dfine_obb_o2_tile.yml", "o2_adr", "box", 200, 5.0,
-             "paper_squared", True,
+            ("dfine_obb_o2_tile.yml", "o2_adr", "box", 100, 5.0,
+             "released_l2", True,
              "MergedDotaOBBEvaluator"),
         )
         config_dir = self.ROOT / "configs" / "dfine"
@@ -254,6 +328,12 @@ class O2ConfigurationTest(unittest.TestCase):
         self.assertTrue(all(head.layers[-1].out_features == 1
                             for head in model.dec_angle_head))
         self.assertEqual(model.dec_bbox_head[0].layers[-1].out_features, 4 * 9)
+        self.assertNotIn("adr_geometry_signature", model.state_dict())
+
+    def test_o2_checkpoint_records_geometry_contract(self):
+        model = _tiny_o2_model(num_denoising=0)
+        self.assertEqual(model.adr_geometry_signature.tolist(), [4, 2, 1])
+        self.assertIn("adr_geometry_signature", model.state_dict())
 
 if __name__ == "__main__":
     unittest.main()

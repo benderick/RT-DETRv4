@@ -212,6 +212,7 @@ def _training_observations(samples, targets, outputs):
             "num_group": denoising_meta.get("dn_num_group"),
             "query_split": denoising_meta.get("dn_num_split"),
             "crowded_policy": denoising_meta.get("dn_crowded_policy"),
+            "group_base_count": denoising_meta.get("dn_group_base_count"),
             "requested_query_budget": denoising_meta.get(
                 "dn_requested_query_budget"),
             "actual_query_count": denoising_meta.get("dn_actual_query_count"),

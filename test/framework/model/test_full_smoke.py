@@ -83,6 +83,21 @@ class FullDFINESmokeTest(unittest.TestCase):
         self.assertEqual(targets[0]["partition_id"], "codrone_dota_w1180_g200_iof0p7")
         self.assertEqual(targets[0]["tile_size"].tolist(), [1180, 1180])
 
+    @unittest.skipUnless(torch.cuda.is_available(), "UAV-ROD 1024 smoke test requires CUDA")
+    def test_real_uav_rod_o2_forward_backward_inference(self):
+        config, targets = self._run_model_step(
+            "configs/experiments/uav_rod/dfine_obb_o2.yml",
+            HGNetv2={"pretrained": False},
+            train_dataloader={
+                "total_batch_size": 1,
+                "num_workers": 0,
+                "drop_last": False,
+            },
+        )
+        self.assertEqual(config.yaml_cfg["num_classes"], 1)
+        self.assertEqual(config.train_dataloader.dataset.classes, ("car",))
+        self.assertGreater(len(targets[0]["boxes"]), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

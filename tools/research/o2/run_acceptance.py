@@ -256,6 +256,11 @@ def _matched_refinement_evidence(
                     "diagnostic_distribution_project"].detach().float().cpu()
                 record["distribution_names"] = tuple(
                     outputs["diagnostic_distribution_names"])
+            raw_orthogonality = outputs.get(
+                "diagnostic_layer_adr_raw_orthogonality_error")
+            if raw_orthogonality is not None:
+                record["raw_orthogonality_error"] = raw_orthogonality[
+                    :, batch_index, query_index].detach().float().cpu()
             best_cases[case_kind] = record
 
     return {
@@ -305,7 +310,14 @@ def _render_case(case, dataset, output: Path):
         f"{case['stage_names'][1]} -> {case['stage_names'][-1]} "
         f"delta IoU={case['adr_delta']:+.3f}\n"
         f"image={dataset.image_ids[image_id]}, query={case['query_index']}, "
-        f"GT={case['gt_index']}")
+        f"GT={case['gt_index']}"
+        + (
+            "\nraw orthogonality: "
+            + " -> ".join(
+                f"{float(value):.3f}"
+                for value in case["raw_orthogonality_error"])
+            if "raw_orthogonality_error" in case else ""
+        ))
     image_axis.legend(loc="upper right", fontsize=8)
 
     logits = case.get("distribution_logits")
@@ -380,6 +392,13 @@ def run(args):
     # are tolerated or hidden behind compatibility fallbacks.
     model.load_state_dict(state, strict=True)
     del state
+    geometry_signature = tuple(
+        int(value) for value in decoder.adr_geometry_signature.tolist()
+    ) if hasattr(decoder, "adr_geometry_signature") else None
+    if geometry_signature != (4, 2, 1):
+        raise RuntimeError(
+            "O² acceptance requires ADR geometry signature (4, 2, 1); "
+            f"observed {geometry_signature!r}")
 
     data_loader = config.val_dataloader
     dataset = data_loader.dataset
@@ -392,6 +411,7 @@ def run(args):
     oracle_evaluator = DotaOBBEvaluator(
         dataset, use_07_metric=config.yaml_cfg["evaluator"].get("use_07_metric", True))
     matched_ious = []
+    adr_raw_orthogonality = []
     oracle_selections = None
     best_cases = {}
     candidate_total = nms_kept_total = no_nms_kept_total = 0
@@ -413,6 +433,12 @@ def run(args):
                 for target in targets_cpu
             ]
             outputs = model(samples)
+            raw_orthogonality = outputs.get(
+                "diagnostic_layer_adr_raw_orthogonality_error")
+            if raw_orthogonality is not None:
+                adr_raw_orthogonality.append(
+                    raw_orthogonality.permute(1, 2, 0).reshape(
+                        -1, raw_orthogonality.shape[0]).detach().float().cpu())
             stage_map = _stage_outputs(outputs)
             if stage_evaluators is None:
                 stage_evaluators = OrderedDict(
@@ -496,6 +522,27 @@ def run(args):
             for name, count in zip(stage_metrics, oracle_selections.tolist())
         },
     }
+    if adr_raw_orthogonality:
+        raw = torch.cat(adr_raw_orthogonality, dim=0)
+        refinement["adr_raw_orthogonality_before_completion"] = {
+            "definition": (
+                "absolute cosine of consecutive gliding-vertex edges before "
+                "equal-diagonal rectangle completion; zero is consistent"
+            ),
+            "per_layer": [
+                {
+                    "layer": layer,
+                    "mean": float(raw[:, layer].mean()),
+                    "median": float(raw[:, layer].median()),
+                    "p90": float(torch.quantile(raw[:, layer], .9)),
+                    "p99": float(torch.quantile(raw[:, layer], .99)),
+                    "max": float(raw[:, layer].max()),
+                    "fraction_le_0p01": float((raw[:, layer] <= .01).float().mean()),
+                    "fraction_ge_0p5": float((raw[:, layer] >= .5).float().mean()),
+                }
+                for layer in range(raw.shape[1])
+            ],
+        }
 
     visualizations = {}
     for name, case in best_cases.items():
@@ -510,6 +557,7 @@ def run(args):
     final_nms_value = final_nms_metrics[primary]
     gates = {
         "strict_checkpoint_load": True,
+        "adr_geometry_signature": geometry_signature == (4, 2, 1),
         "full_image_evaluator": evaluator_type == "DotaOBBEvaluator",
         "all_images_evaluated": len(final_nms_evaluator.predictions) == len(dataset),
         "final_ap_not_below_layer0": (
@@ -523,6 +571,7 @@ def run(args):
     }
     required_gates = (
         "strict_checkpoint_load",
+        "adr_geometry_signature",
         "full_image_evaluator",
         "all_images_evaluated",
         "final_ap_not_below_layer0",
@@ -539,6 +588,8 @@ def run(args):
         "checkpoint_sha256": _sha256(checkpoint_path),
         "checkpoint_state_source": checkpoint_source,
         "checkpoint_epoch": checkpoint_epoch,
+        "adr_geometry_signature": geometry_signature,
+        "adr_geometry_contract": "dfine4_plus_vertex2_equal_diagonal",
         "dataset": {
             "root": str(dataset.root),
             "images": len(dataset),

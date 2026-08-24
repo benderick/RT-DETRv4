@@ -11,7 +11,14 @@ from ..core import register
 from ..misc.dist_utils import get_world_size, is_dist_available_and_initialized
 from .box_ops import box_cxcywh_to_xyxy
 from .dfine_utils import bbox2distance
-from .obb.methods.o2.adr import adr_target_residual, rbox_to_adr, translate_with_project
+from .obb.methods.o2.adr import (
+    adr_orthogonality_error,
+    adr_target_residual,
+    apply_adr_residuals,
+    distribution_integral,
+    rbox_to_adr,
+    translate_with_project,
+)
 from .rotated_box_ops import aligned_kld_loss, angle_distance, rotated_iou
 
 
@@ -366,6 +373,7 @@ class RotatedRTv4Criterion(nn.Module):
                         else "paper/released periodic-pi baseline",
                 },
                 "refinement_kind": outputs.get("refinement_kind"),
+                "adr_geometry_contract": outputs.get("adr_geometry_contract"),
             }
         else:
             self.last_diagnostics = None
@@ -509,6 +517,16 @@ class RotatedRTv4Criterion(nn.Module):
                 "adr_target_residual_abs": target_residual.abs().mean(dim=-1),
                 "adr_target_offset_residual_abs": target_residual[:, 4:].abs().mean(dim=-1),
             })
+            if "pred_corners" in outputs:
+                predicted_distribution = outputs["pred_corners"][matched]
+                predicted_residual = distribution_integral(
+                    predicted_distribution, project, components=6)
+                predicted_values = apply_adr_residuals(
+                    reference_boxes, predicted_residual)
+                raw_orthogonality = adr_orthogonality_error(predicted_values)
+                values["adr_raw_orthogonality_error"] = raw_orthogonality
+            else:
+                raw_orthogonality = None
             adr_chart = {
                 "definition": (
                     "min over epsilon/Wr, eta/Hr of distance to the identified "
@@ -523,6 +541,15 @@ class RotatedRTv4Criterion(nn.Module):
                 "near_endpoint_count_0p05": int((seam_distance <= 0.05).sum()),
                 "outside_codebook_component_count": int(outside_codebook.sum()),
                 "outside_codebook_box_count": int(outside_codebook.any(dim=-1).sum()),
+                "raw_orthogonality_error_definition": (
+                    "absolute cosine between consecutive raw gliding-vertex "
+                    "edges before equal-diagonal rectangle completion"
+                ),
+                "raw_orthogonality_error_mean": (
+                    float(raw_orthogonality.float().mean())
+                    if raw_orthogonality is not None and len(raw_orthogonality)
+                    else None
+                ),
                 "matched_count": int(len(target_boxes)),
             }
         summary = {"matched_count": values.pop("matched_count")}

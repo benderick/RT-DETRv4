@@ -3,7 +3,14 @@ import unittest
 
 import torch
 
-from engine.rtv4.obb.methods.o2.adr import adr_target_residual, adr_to_rbox, rbox_to_adr
+from engine.rtv4.obb.methods.o2.adr import (
+    adr_orthogonality_error,
+    adr_target_residual,
+    adr_to_rbox,
+    adr_values_to_corners,
+    apply_adr_residuals,
+    rbox_to_adr,
+)
 from engine.rtv4.rotated_box_ops import aligned_kld_loss, rbox_to_corners
 
 
@@ -150,6 +157,14 @@ class O2ADRGeometryTest(unittest.TestCase):
         )
         self.assertLess(float(geometry_gap), 1e-6)
 
+    def test_axis_tie_starts_both_offsets_at_the_external_corner(self):
+        boxes = torch.tensor([[.5, .5, .30, .10, 0.]], dtype=torch.float64)
+        values, scale = rbox_to_adr(boxes)
+        torch.testing.assert_close(
+            values[:, 4:] / scale,
+            torch.zeros((1, 2), dtype=torch.float64),
+        )
+
     def test_equivalent_width_height_parameterizations_have_one_adr_encoding(self):
         for dtype in (torch.float32, torch.float64):
             with self.subTest(dtype=dtype):
@@ -193,6 +208,44 @@ class O2ADRGeometryTest(unittest.TestCase):
                     target,
                     atol=4e-6 if dtype == torch.float32 else 5e-13,
                 )
+
+                target_values = apply_adr_residuals(reference, residual)
+                self.assertLessEqual(
+                    float(adr_orthogonality_error(target_values).max()),
+                    2e-5 if dtype == torch.float32 else 2e-12,
+                )
+
+    def test_six_values_use_standard_equal_diagonal_rectangle_completion(self):
+        centers = torch.tensor([[.4, .6], [.7, .2]], dtype=torch.float64)
+        values = torch.tensor([
+            [.17, .11, .23, .19, .31, -.07],
+            [.09, .21, .14, .08, -.04, .26],
+        ], dtype=torch.float64)
+        observed = adr_values_to_corners(centers, values)
+
+        left, top, right, bottom, epsilon, eta = values.unbind(-1)
+        width = (left + right).clamp_min(1e-7)
+        height = (top + bottom).clamp_min(1e-7)
+        refined_center = torch.stack((
+            centers[:, 0] + .5 * (right - left),
+            centers[:, 1] + .5 * (bottom - top),
+        ), dim=-1)
+        diagonal = torch.stack((
+            torch.stack((width / 2 - epsilon, -height / 2), dim=-1),
+            torch.stack((width / 2, height / 2 - eta), dim=-1),
+        ), dim=1)
+        radius = torch.linalg.vector_norm(diagonal, dim=-1)
+        diagonal = diagonal * (radius.max(dim=-1, keepdim=True).values / radius).unsqueeze(-1)
+        first, second = diagonal.unbind(dim=1)
+        expected = torch.stack((first, second, -first, -second), dim=1)
+        expected += refined_center[:, None]
+        torch.testing.assert_close(observed, expected, atol=1e-14, rtol=0)
+
+        edge1 = observed[:, 1] - observed[:, 0]
+        edge2 = observed[:, 2] - observed[:, 1]
+        torch.testing.assert_close(
+            (edge1 * edge2).sum(dim=-1), torch.zeros(2, dtype=torch.float64),
+            atol=1e-14, rtol=0)
 
     def test_random_six_values_always_decode_to_an_orthogonal_rectangle(self):
         generator = torch.Generator().manual_seed(31415)
@@ -238,7 +291,7 @@ class O2ADRGeometryTest(unittest.TestCase):
         self.assertTrue(torch.isfinite(residual.grad).all())
         self.assertAlmostEqual(float(residual.grad[0, 0]), -0.1, places=12)
 
-    def test_direct_gliding_vertex_decode_backward_is_finite_for_both_dtypes(self):
+    def test_equal_diagonal_adr_decode_backward_is_finite_for_both_dtypes(self):
         for dtype in (torch.float32, torch.float64):
             with self.subTest(dtype=dtype):
                 reference = torch.tensor(
@@ -283,9 +336,8 @@ class O2ADRGeometryTest(unittest.TestCase):
         self.assertTrue(torch.isfinite(gradient).all())
 
     def test_codebook_residual_to_kld_stress_has_finite_backward(self):
-        # The removed midpoint-style radial projection deterministically made
-        # one of these finite decoded boxes singular in covariance KLD.  This
-        # exercises the complete ADR -> OBB -> KLD backward chain, not just a
+        # This exercises the complete equal-diagonal ADR -> OBB -> closed-form
+        # KLD backward chain over the full published codebook, not merely a
         # box-valued surrogate loss.
         generator = torch.Generator().manual_seed(0)
         count = 32_768

@@ -26,7 +26,7 @@ class RotatedHungarianMatcher(nn.Module):
         use_focal_loss=True,
         alpha=0.25,
         gamma=2.0,
-        chamfer_distance="paper_squared",
+        chamfer_distance="released_l2",
         kld_sqrt=False,
         kld_fun="log1p",
         kld_tau=1.0,

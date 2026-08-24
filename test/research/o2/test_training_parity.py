@@ -172,6 +172,24 @@ class KLDAndChamferParityTest(unittest.TestCase):
             "source_alignment": "released O2-RTDETR configuration",
         })
 
+    def test_cdc_resolves_the_kld_square_problem_but_respects_true_symmetry(self):
+        square = torch.tensor([[.5, .5, .2, .2, 0.]], dtype=torch.float64)
+        different_geometry = square.clone()
+        different_geometry[:, 4] = .25  # 45 degrees: a different square set.
+        equivalent_geometry = square.clone()
+        equivalent_geometry[:, 4] = .5  # 90 degrees: the same square set.
+
+        kld = pairwise_kld_cost(
+            square, different_geometry, sqrt=False, fun="log1p", tau=1)
+        cdc = pairwise_chamfer_cost(
+            square, different_geometry, distance_mode="released_l2")
+        equivalent_cdc = pairwise_chamfer_cost(
+            square, equivalent_geometry, distance_mode="released_l2")
+        torch.testing.assert_close(kld, torch.zeros_like(kld), atol=1e-14, rtol=0)
+        self.assertGreater(float(cdc), 0.01)
+        torch.testing.assert_close(
+            equivalent_cdc, torch.zeros_like(equivalent_cdc), atol=1e-14, rtol=0)
+
 
 class SquareAwareAngleLossTest(unittest.TestCase):
     @staticmethod
@@ -293,10 +311,10 @@ class DfineUnionAndCrowdedOCDTest(unittest.TestCase):
 
     def test_released_dynamic_exceeds_budget_instead_of_dropping_gt(self):
         boxes = torch.tensor([
-            [.1 + .1 * index, .5, .05, .03, .1]
-            for index in range(7)
+            [.05 + .07 * index, .5, .05, .03, .1]
+            for index in range(12)
         ])
-        targets = [{"labels": torch.arange(7) % 2, "boxes": boxes}]
+        targets = [{"labels": torch.arange(12) % 2, "boxes": boxes}]
         embedding = torch.nn.Embedding(3, 8, padding_idx=2)
         _, _, _, meta = get_rotated_contrastive_denoising_training_group(
             targets,
@@ -308,20 +326,22 @@ class DfineUnionAndCrowdedOCDTest(unittest.TestCase):
             mode="none",
             crowded_policy="released_dynamic",
         )
-        self.assertEqual(meta["dn_actual_query_count"], 14)
+        self.assertEqual(meta["dn_group_base_count"], 10)
+        self.assertEqual(meta["dn_requested_query_budget"], 20)
+        self.assertEqual(meta["dn_actual_query_count"], 24)
         self.assertTrue(meta["dn_budget_exceeded"])
-        self.assertEqual(meta["dn_selected_gt_counts"], [7])
+        self.assertEqual(meta["dn_selected_gt_counts"], [12])
         self.assertEqual(meta["dn_dropped_gt_counts"], [0])
         self.assertEqual(len(meta["dn_dropped_target_idx"][0]), 0)
-        torch.testing.assert_close(meta["dn_target_idx"][0], torch.arange(7))
+        torch.testing.assert_close(meta["dn_target_idx"][0], torch.arange(12))
 
     def test_strict_budget_drop_is_explicit_and_auditable(self):
         torch.manual_seed(3)
         boxes = torch.tensor([
-            [.1 + .1 * index, .5, .05, .03, .1]
-            for index in range(7)
+            [.05 + .07 * index, .5, .05, .03, .1]
+            for index in range(12)
         ])
-        targets = [{"labels": torch.arange(7) % 2, "boxes": boxes}]
+        targets = [{"labels": torch.arange(12) % 2, "boxes": boxes}]
         embedding = torch.nn.Embedding(3, 8, padding_idx=2)
         _, _, _, meta = get_rotated_contrastive_denoising_training_group(
             targets,
@@ -333,17 +353,19 @@ class DfineUnionAndCrowdedOCDTest(unittest.TestCase):
             mode="none",
             crowded_policy="strict_budget_random",
         )
-        self.assertEqual(meta["dn_actual_query_count"], 10)
+        self.assertEqual(meta["dn_group_base_count"], 10)
+        self.assertEqual(meta["dn_requested_query_budget"], 20)
+        self.assertEqual(meta["dn_actual_query_count"], 20)
         self.assertFalse(meta["dn_budget_exceeded"])
-        self.assertEqual(meta["dn_selected_gt_counts"], [5])
+        self.assertEqual(meta["dn_selected_gt_counts"], [10])
         self.assertEqual(meta["dn_dropped_gt_counts"], [2])
-        self.assertEqual(len(meta["dn_target_idx"][0]), 5)
-        self.assertEqual(len(meta["dn_selected_target_idx"][0]), 5)
+        self.assertEqual(len(meta["dn_target_idx"][0]), 10)
+        self.assertEqual(len(meta["dn_selected_target_idx"][0]), 10)
         self.assertEqual(len(meta["dn_dropped_target_idx"][0]), 2)
         self.assertEqual(
             set(meta["dn_selected_target_idx"][0].tolist()) |
             set(meta["dn_dropped_target_idx"][0].tolist()),
-            set(range(7)),
+            set(range(12)),
         )
 
     def test_primary_config_records_every_non_equivalent_choice(self):
@@ -354,7 +376,8 @@ class DfineUnionAndCrowdedOCDTest(unittest.TestCase):
             "kld_sqrt: False",
             "kld_fun: log1p",
             "kld_tau: 1.0",
-            "chamfer_distance: paper_squared",
+            "chamfer_distance: released_l2",
+            "num_denoising: 100",
             "angle_loss_mode: periodic_pi",
             "square_anisotropy_threshold: 0.0",
         ):

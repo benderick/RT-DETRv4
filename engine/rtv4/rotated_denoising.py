@@ -26,7 +26,7 @@ def _signed_annulus_like(value, inner, outer):
 
 
 def apply_ocd_box_noise(boxes, negative, lambda1=1.0, lambda2=2.0, scale=1.0):
-    """Apply the paper's vertex-coordinate box noise in the local box frame."""
+    """Apply the paper/released O² noise to the two ``xyxy`` vertices."""
 
     if lambda1 < 0 or lambda2 < lambda1:
         raise ValueError("OCD box noise requires 0 <= lambda1 <= lambda2")
@@ -38,10 +38,12 @@ def apply_ocd_box_noise(boxes, negative, lambda1=1.0, lambda2=2.0, scale=1.0):
     delta = torch.where(negative.expand_as(xyxy).bool(), negative_delta, positive_delta)
     xyxy = xyxy + delta * coordinate_scale * scale
     first, second = xyxy[..., :2], xyxy[..., 2:]
-    low, high = torch.minimum(first, second), torch.maximum(first, second)
     result = boxes.clone()
-    result[..., :2] = (low + high) / 2
-    result[..., 2:4] = (high - low).clamp_min(1e-5)
+    # Match bbox_xyxy_to_cxcywh used by the released O²-RTDETR source.
+    # Do not reorder crossed noisy vertices here: the public implementation
+    # converts them algebraically and clamps the resulting tuple afterwards.
+    result[..., :2] = (first + second) / 2
+    result[..., 2:4] = second - first
     return result
 
 
@@ -135,7 +137,11 @@ def get_rotated_contrastive_denoising_training_group(
             f"Unknown OCD crowded policy {crowded_policy!r}; "
             f"expected one of {OCD_CROWDED_POLICIES}")
     device = targets[0]["labels"].device
-    max_selected = max(1, num_denoising // 2)
+    # D-FINE/O² define ``num_denoising`` before the positive/negative
+    # expansion.  The nominal number of decoder queries is therefore twice
+    # this value.  Keeping that convention avoids a policy-dependent meaning
+    # for the same configuration field.
+    max_selected = max(1, num_denoising)
     selected_indices = []
     for target in targets:
         count = len(target["labels"])
@@ -148,12 +154,12 @@ def get_rotated_contrastive_denoising_training_group(
     if max_gt == 0:
         return None, None, None, None
 
-    # One group contains a positive and a negative copy. ``released_dynamic``
-    # follows the released dynamic-group behavior: a crowded image can exceed
-    # the requested query budget instead of silently losing GT supervision.
-    # ``strict_budget_random`` instead caps the selected GT set and records
-    # every dropped count/target index in metadata.
-    num_group = max(1, num_denoising // (2 * max_gt))
+    # One group contains a positive and a negative copy.  This is the exact
+    # dynamic grouping convention shared by D-FINE and the released O² query
+    # generator: floor(num_denoising / max_gt), with at least one group.
+    # ``strict_budget_random`` first limits the selected GT set so the
+    # expanded count never exceeds the nominal 2 * num_denoising total.
+    num_group = max(1, num_denoising // max_gt)
     batch_size = len(targets)
     classes = torch.full((batch_size, max_gt), num_classes, dtype=torch.long, device=device)
     boxes = torch.zeros((batch_size, max_gt, 5), device=device)
@@ -194,10 +200,15 @@ def get_rotated_contrastive_denoising_training_group(
         elif mode == "probability":
             boxes = apply_ocd_probability_noise(
                 boxes, negative, lambda5, lambda6, box_noise_scale)
-        if mode != "none":
+        if mode == "standard":
+            # Preserve the established direct-angle control's canonical OBB
+            # path.  O² modes below intentionally follow the released source
+            # tuple semantics instead.
             boxes[..., :4].clamp_(min=1e-5, max=1 - 1e-5)
             boxes[..., :2].clamp_(min=1e-5, max=1 - 1e-5)
             boxes = regularize_rboxes(boxes, normalized_angle=True).clamp(1e-5, 1 - 1e-5)
+        elif mode != "none":
+            boxes = boxes.clamp(0.0, 1.0)
 
     query_logits = class_embed(classes)
     query_boxes_unact = inverse_sigmoid(boxes.clamp(1e-5, 1 - 1e-5))
@@ -225,9 +236,10 @@ def get_rotated_contrastive_denoising_training_group(
         "dn_noise_mode": mode,
         "dn_noise_lambdas": [lambda1, lambda2, lambda3, lambda4, lambda5, lambda6],
         "dn_crowded_policy": crowded_policy,
-        "dn_requested_query_budget": int(num_denoising),
+        "dn_group_base_count": int(num_denoising),
+        "dn_requested_query_budget": int(2 * num_denoising),
         "dn_actual_query_count": total_dn,
-        "dn_budget_exceeded": total_dn > num_denoising,
+        "dn_budget_exceeded": total_dn > 2 * num_denoising,
         "dn_original_gt_counts": [len(target["labels"]) for target in targets],
         "dn_selected_gt_counts": counts,
         "dn_dropped_gt_counts": [

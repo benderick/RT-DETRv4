@@ -1,0 +1,62 @@
+task: detection
+
+num_classes: 1
+remap_mscoco_category: False
+
+evaluator:
+  type: DotaOBBEvaluator
+  use_07_metric: True
+
+train_dataloader:
+  type: DataLoader
+  dataset:
+    type: UAVRODDetection
+    root: ../data/UAV-ROD/train
+    image_dir: images
+    ann_dir: annfile
+    filter_empty_gt: False
+    transforms:
+      type: Compose
+      ops:
+        - {type: RotatedPhotometricDistort, p: 0.8}
+        - {type: RotatedResizePad, size: [1024, 1024], fill: 114}
+        - {type: RotatedRandomFlip, p: 0.75, directions: [horizontal, vertical, diagonal]}
+        - {type: RotatedRandomRotate, p: 0.5, angle_range: 180, fill: 114}
+        - {type: RotatedSanitizeBoxes, min_size: 1, min_visible: 0.2}
+        - {type: RotatedConvertToTensor, normalize_boxes: True}
+  shuffle: True
+  total_batch_size: 16
+  num_workers: 4
+  drop_last: True
+  collate_fn:
+    type: BatchImageCollateFunction
+    base_size: 1024
+    base_size_repeat: ~
+    stop_epoch: ~
+    mixup_prob: 0.0
+
+val_dataloader:
+  type: DataLoader
+  dataset:
+    type: UAVRODDetection
+    # UAV-ROD publishes train/test only; its labelled test split is the
+    # validation/evaluation split in this framework.
+    root: ../data/UAV-ROD/test
+    image_dir: images
+    ann_dir: annfile
+    transforms:
+      type: Compose
+      ops:
+        - {type: RotatedResizePad, size: [1024, 1024], fill: 114}
+        - {type: RotatedSanitizeBoxes, min_size: 1, min_visible: 0.0}
+        - {type: RotatedConvertToTensor, normalize_boxes: True}
+  shuffle: False
+  total_batch_size: 16
+  num_workers: 4
+  drop_last: False
+  collate_fn:
+    type: BatchImageCollateFunction
+    base_size: 1024
+    base_size_repeat: ~
+    stop_epoch: ~
+    mixup_prob: 0.0

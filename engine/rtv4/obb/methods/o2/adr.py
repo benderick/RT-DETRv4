@@ -1,9 +1,11 @@
 """Geometry primitives for O^2-DFINE Angle Distribution Refinement.
 
-The paper represents an oriented rectangle by the four distances from its
-centre to the edges of its external axis-aligned rectangle and two gliding
-vertex offsets.  This module keeps that representation isolated from the
-decoder so its encode/decode contract can be tested independently.
+The paper inherits D-FINE's four external-boundary refinements and adds two
+gliding-vertex offsets.  The six predicted quantities jointly describe one
+oriented rectangle: the first four produce its external horizontal box,
+while ``epsilon`` and ``eta`` move the top-right and bottom-right external
+corners along the top and right edges respectively.  This module keeps that
+contract isolated from the decoder so it can be tested independently.
 
 Model-space boxes are ``(cx, cy, w, h, theta / pi)``.  The implementation
 assumes an isotropic model canvas (current OBB recipes pad to a square)
@@ -97,12 +99,15 @@ def _side_vertices(corners: Tensor) -> tuple[Tensor, Tensor, Tensor, Tensor]:
     max_x = x.max(dim=-1, keepdim=True).values
 
     # Axis-aligned rectangles contain two vertices on every extreme side.
-    # Choosing top-left, top-right, bottom-right and bottom-left respectively
-    # makes their gliding offsets reconstruct the original rectangle exactly.
-    top_index = torch.where(y == min_y, x, inf).argmin(dim=-1)
-    right_index = torch.where(x == max_x, y, inf).argmin(dim=-1)
-    bottom_index = torch.where(y == max_y, -x, inf).argmin(dim=-1)
-    left_index = torch.where(x == min_x, -y, inf).argmin(dim=-1)
+    # The midpoint-offset convention chooses the corner from which the
+    # corresponding displacement starts: top-right for epsilon and
+    # bottom-right for eta.  The opposite vertices follow by central
+    # symmetry.  This gives epsilon=eta=0 for an axis-aligned box and matches
+    # the standard six-value midpoint/gliding-vertex geometry.
+    top_index = torch.where(y == min_y, -x, inf).argmin(dim=-1)
+    right_index = torch.where(x == max_x, -y, inf).argmin(dim=-1)
+    bottom_index = torch.where(y == max_y, x, inf).argmin(dim=-1)
+    left_index = torch.where(x == min_x, y, inf).argmin(dim=-1)
 
     def gather(index: Tensor) -> Tensor:
         return corners.gather(
@@ -182,6 +187,90 @@ def rbox_to_adr(boxes: Tensor, normalized_angle: bool = True) -> tuple[Tensor, T
     return torch.cat((edges, offsets), dim=-1), scale
 
 
+def apply_adr_residuals(
+    reference_boxes: Tensor,
+    residuals: Tensor,
+    normalized_angle: bool = True,
+) -> Tensor:
+    """Apply paper-defined residual scaling and return six refined values."""
+
+    if reference_boxes.shape[:-1] != residuals.shape[:-1]:
+        raise ValueError("ADR references and residuals must have matching leading shapes")
+    if reference_boxes.shape[-1] != 5 or residuals.shape[-1] != 6:
+        raise ValueError("ADR residual application expects (..., 5) boxes and (..., 6) residuals")
+    base, external_scale = rbox_to_adr(
+        reference_boxes, normalized_angle=normalized_angle)
+    scale6 = torch.cat((external_scale, external_scale, external_scale), dim=-1)
+    return base + scale6 * residuals
+
+
+def adr_orthogonality_error(values: Tensor) -> Tensor:
+    """Return the raw gliding-vertex quadrilateral's absolute edge cosine.
+
+    A legal rectangle satisfies
+
+    ``epsilon * (Wr - epsilon) = eta * (Hr - eta)``.
+
+    Six independently refined expectations need not satisfy that equality at
+    every optimization step.  The returned value is zero for a consistent
+    ADR state and approaches one as its two consecutive raw edges become
+    parallel.  It is a diagnostic of the representation before rectangle
+    completion, not an additional loss.
+    """
+
+    if values.shape[-1] != 6:
+        raise ValueError("ADR consistency expects (..., 6) values")
+    left, top, right, bottom, epsilon, eta = values.unbind(-1)
+    width = _positive_span(left + right)
+    height = _positive_span(top + bottom)
+    first = torch.stack((epsilon, height - eta), dim=-1)
+    second = torch.stack((-(width - epsilon), eta), dim=-1)
+    denominator = (
+        torch.linalg.vector_norm(first, dim=-1)
+        * torch.linalg.vector_norm(second, dim=-1)
+    ).clamp_min(1e-12)
+    return ((first * second).sum(dim=-1).abs() / denominator).clamp(0, 1)
+
+
+def adr_values_to_corners(reference_centers: Tensor, values: Tensor) -> Tensor:
+    """Complete six ADR values into exact top/right/bottom/left vertices.
+
+    The paper-defined offsets first produce a centrally symmetric four-point
+    state.  For a valid target its two centre-to-vertex diagonals already
+    have equal length.  Independently predicted distributions can violate
+    that one consistency relation, so we use the standard midpoint-offset
+    completion: scale both diagonal directions to their larger radius.
+    A centrally symmetric quadrilateral with equal diagonals is exactly a
+    rectangle.  This is fully differentiable and avoids an OpenCV/min-area
+    rectangle conversion.
+    """
+
+    if reference_centers.shape[:-1] != values.shape[:-1]:
+        raise ValueError("ADR centres and values must have matching leading shapes")
+    if reference_centers.shape[-1] != 2 or values.shape[-1] != 6:
+        raise ValueError("ADR corner decode expects (..., 2) centres and (..., 6) values")
+
+    left, top_distance, right, bottom_distance = values[..., :4].unbind(-1)
+    width = _positive_span(left + right)
+    height = _positive_span(top_distance + bottom_distance)
+    center = torch.stack(
+        (reference_centers[..., 0] + 0.5 * (right - left),
+         reference_centers[..., 1] + 0.5 * (bottom_distance - top_distance)),
+        dim=-1,
+    )
+    epsilon, eta = values[..., 4:].unbind(-1)
+    top = torch.stack((0.5 * width - epsilon, -0.5 * height), dim=-1)
+    right_vertex = torch.stack((0.5 * width, 0.5 * height - eta), dim=-1)
+    diagonal = torch.stack((top, right_vertex), dim=-2)
+    radii = torch.linalg.vector_norm(diagonal, dim=-1).clamp_min(1e-7)
+    common_radius = radii.amax(dim=-1, keepdim=True)
+    diagonal = diagonal * (common_radius / radii).unsqueeze(-1)
+    top, right_vertex = diagonal.unbind(dim=-2)
+    centered_corners = torch.stack(
+        (top, right_vertex, -top, -right_vertex), dim=-2)
+    return centered_corners + center.unsqueeze(-2)
+
+
 def adr_values_to_rbox(
     reference_centers: Tensor,
     values: Tensor,
@@ -202,42 +291,8 @@ def adr_values_to_rbox(
     if reference_centers.shape[-1] != 2 or values.shape[-1] != 6:
         raise ValueError("ADR value decode expects (..., 2) centres and (..., 6) values")
 
-    left, top_distance, right, bottom_distance = values[..., :4].unbind(-1)
-    width = _positive_span(left + right)
-    height = _positive_span(top_distance + bottom_distance)
-
-    # Difference controls the new external-rectangle centre even when one
-    # signed side distance crosses zero.  Repairing the joint span rather
-    # than individual sides preserves this correction.
-    center = torch.stack(
-        (reference_centers[..., 0] + 0.5 * (right - left),
-         reference_centers[..., 1] + 0.5 * (bottom_distance - top_distance)),
-        dim=-1,
-    )
-    half_size = 0.5 * torch.stack((width, height), dim=-1)
-    x1y1 = center - half_size
-    x2y2 = center + half_size
-    epsilon, eta = values[..., 4:].unbind(-1)
-
-    raw_corners = torch.stack(
-        (
-            torch.stack((x2y2[..., 0] - epsilon, x1y1[..., 1]), dim=-1),
-            torch.stack((x2y2[..., 0], x2y2[..., 1] - eta), dim=-1),
-            torch.stack((x1y1[..., 0] + epsilon, x2y2[..., 1]), dim=-1),
-            torch.stack((x1y1[..., 0], x1y1[..., 1] + eta), dim=-1),
-        ),
-        dim=-2,
-    )
-    # The paper defines these as the ordered top/right/bottom/left vertices.
-    # For a valid ADR state they are already an exact rectangle.  During
-    # learning the six independent expectations can be inconsistent; the
-    # minimal geometric completion is to use the two consecutive edge
-    # lengths and the longer edge direction, exactly as the framework's
-    # ordered-quadrilateral OBB conversion does.  In particular, do not
-    # import midpoint-offset radial projection here: that coder solves a
-    # different representation and can collapse two adjacent ADR vertices
-    # onto an almost collinear state.
-    boxes = corners_to_rboxes(raw_corners)
+    corners = adr_values_to_corners(reference_centers, values)
+    boxes = corners_to_rboxes(corners)
     if normalized_angle:
         boxes = boxes.clone()
         boxes[..., 4] /= math.pi
@@ -249,19 +304,12 @@ def adr_to_rbox(
     residuals: Tensor,
     normalized_angle: bool = True,
 ) -> Tensor:
-    """Apply six ADR residuals and decode the ordered gliding vertices.
-
-    The paper does not specify how an inconsistent intermediate six-tuple is
-    converted to five OBB parameters.  We use the framework's direct ordered
-    quadrilateral conversion; no unrelated coder or radial projection is
-    inserted into the paper-derived path.
-    """
+    """Apply four D-FINE boundaries plus two vertex-offset refinements."""
 
     if reference_boxes.shape[:-1] != residuals.shape[:-1] or residuals.shape[-1] != 6:
         raise ValueError("ADR decode expects matching (..., 5) boxes and (..., 6) residuals")
-    base, external_scale = rbox_to_adr(reference_boxes, normalized_angle=normalized_angle)
-    scale6 = torch.cat((external_scale, external_scale, external_scale), dim=-1)
-    values = base + scale6 * residuals
+    values = apply_adr_residuals(
+        reference_boxes, residuals, normalized_angle=normalized_angle)
     return adr_values_to_rbox(
         reference_boxes[..., :2], values, normalized_angle=normalized_angle)
 

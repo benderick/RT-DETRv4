@@ -211,3 +211,16 @@ marimo/_lsp/
 __marimo__/
 
 data
+
+# The broad historical ``data`` rule also matches Python source-package
+# directories. Keep local datasets ignored while allowing these canonical
+# UAV-ROD adapter/test additions to be tracked.
+!engine/data/
+engine/data/*
+!engine/data/dataset/
+engine/data/dataset/*
+!engine/data/dataset/dota_obb_dataset.py
+!engine/data/dataset/uav_rod_dataset.py
+!test/framework/data/
+test/framework/data/*
+!test/framework/data/test_uav_rod_data.py

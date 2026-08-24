@@ -14,7 +14,9 @@ from .dfine_decoder import DFINETransformer, MLP, TransformerDecoder
 from .dfine_utils import distance2bbox, weighting_function
 from .obb.methods.o2.adr import (
     ADR_COMPONENT_NAMES,
+    adr_orthogonality_error,
     adr_to_rbox,
+    apply_adr_residuals,
     distribution_integral,
     o2_weighting_function,
 )
@@ -136,7 +138,7 @@ class RotatedDFINETransformer(DFINETransformer):
         feat_channels=(512, 1024, 2048), feat_strides=(8, 16, 32),
         num_levels=3, num_points=4, nhead=8, num_layers=6,
         dim_feedforward=1024, dropout=0.0, activation="relu",
-        num_denoising=200, label_noise_ratio=0.5, box_noise_scale=1.0,
+        num_denoising=100, label_noise_ratio=0.5, box_noise_scale=1.0,
         learn_query_content=False, eval_spatial_size=None, eval_idx=-1,
         eps=1e-2, aux_loss=True, cross_attn_method="default",
         query_select_method="default", reg_max=32, reg_scale=4.0,
@@ -196,6 +198,11 @@ class RotatedDFINETransformer(DFINETransformer):
             ])
             self.register_buffer(
                 "adr_project", o2_weighting_function(self.reg_max, adr_a, adr_c))
+            # Persistent representation signature: four external boundaries,
+            # two vertex offsets, and equal-diagonal rectangle completion.
+            # This is a geometry contract, not a historical version number.
+            self.register_buffer(
+                "adr_geometry_signature", torch.tensor([4, 2, 1], dtype=torch.int32))
         else:
             # The explicit direct-angle variant preserves the original
             # parameter names and shapes, so its existing checkpoints still
@@ -293,10 +300,26 @@ class RotatedDFINETransformer(DFINETransformer):
             dn_logits = dn_boxes = attention_mask = dn_meta = None
         content, refs, enc_boxes, enc_logits = self._get_decoder_input(
             memory, spatial_shapes, dn_logits, dn_boxes)
-        # Every model-facing box follows the same long-edge convention,
-        # including encoder proposals and denoising references.
-        refs = inverse_sigmoid(regularize_rboxes(
-            torch.sigmoid(refs), normalized_angle=True).clamp(1e-5, 1 - 1e-5))
+        decoded_refs = torch.sigmoid(refs)
+        if self.use_adr and dn_meta is not None:
+            # Released O² box noise keeps theta fixed while perturbing the
+            # two xyxy vertices.  If the perturbed w/h cross, canonicalizing
+            # this DN tuple here would numerically add a quarter turn before
+            # the first attention layer.  Preserve the released DN reference;
+            # matching-query references retain the framework's long-edge
+            # convention.  The first traditional OBB head canonicalizes both.
+            dn_count = dn_meta["dn_num_split"][0]
+            dn_refs, matching_refs = torch.split(
+                decoded_refs, [dn_count, decoded_refs.shape[1] - dn_count], dim=1)
+            decoded_refs = torch.cat((
+                dn_refs,
+                regularize_rboxes(matching_refs, normalized_angle=True),
+            ), dim=1)
+        else:
+            # This branch is unchanged for the direct-angle control.
+            decoded_refs = regularize_rboxes(
+                decoded_refs, normalized_angle=True)
+        refs = inverse_sigmoid(decoded_refs.clamp(1e-5, 1 - 1e-5))
         enc_boxes = [regularize_rboxes(boxes, normalized_angle=True) for boxes in enc_boxes]
         out_boxes, out_logits, out_corners, out_refs, pre_boxes, pre_logits = \
             self._decode_queries(
@@ -325,6 +348,7 @@ class RotatedDFINETransformer(DFINETransformer):
             result["refinement_mode"] = self.refinement_mode
             if self.use_adr:
                 result["adr_project"] = self.adr_project
+                result["adr_geometry_contract"] = "dfine4_plus_vertex2_equal_diagonal"
         else:
             result = {"pred_logits": out_logits[-1], "pred_boxes": out_boxes[-1]}
             if bool(getattr(self.decoder, "diagnostic_mode", False)):
@@ -343,6 +367,15 @@ class RotatedDFINETransformer(DFINETransformer):
                 result["diagnostic_distribution_names"] = (
                     ADR_COMPONENT_NAMES if self.use_adr else
                     ("left", "top", "right", "bottom"))
+                if self.use_adr:
+                    adr_residuals = distribution_integral(
+                        out_corners, self.adr_project, components=6)
+                    adr_values = apply_adr_residuals(out_refs, adr_residuals)
+                    result["diagnostic_layer_adr_residuals"] = adr_residuals
+                    result["diagnostic_layer_adr_raw_orthogonality_error"] = \
+                        adr_orthogonality_error(adr_values)
+                    result["diagnostic_adr_geometry_contract"] = \
+                        "dfine4_plus_vertex2_equal_diagonal"
                 active_layers = self.decoder.layers[:len(out_boxes)]
                 if active_layers and all(
                         hasattr(layer.cross_attn, "last_sampling_locations")

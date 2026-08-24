@@ -21,9 +21,9 @@
 最新实测结果在每次清理或公共接口变更后更新；CUDA/真实数据不可用造成的 skip 必须
 保留明确原因，不能记作已通过。
 
-## 2026-08-24 清理后结果
+## 当前结果
 
-完整入口实测：**98 tests run，96 passed，2 skipped，0 failures**。两个 skip 分别是
-O² 原图 1024 CUDA smoke 和 O² tile 1024 CUDA smoke；当前会话无法初始化 CUDA/NVML。
-此外，`logs/dfine_obb_angle/checkpoint0029.pth` 与
-`logs/dfine_obb_o2/checkpoint0029.pth` 的 model/EMA state dict 均已严格加载成功。
+完整入口实测：**114 tests run，111 passed，3 skipped，0 failures**。三个 skip 分别是
+CODrone 原图、CODrone tile 和 UAV-ROD 的 O² 1024 CUDA smoke；当前会话无法初始化
+CUDA/NVML。现有 `logs/dfine_obb_angle/checkpoint0029.pth` 对 direct-angle 模型
+strict load 为零 missing、零 unexpected。O² 等待正确实现从头训练，不使用旧权重。
