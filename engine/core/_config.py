@@ -90,6 +90,9 @@ class BaseConfig(object):
         self.diagnostics_train_interval: int = 50
         self.diagnostics_detailed_image_limit: int = 32
         self.diagnostics_detailed_epoch_interval: int = 1
+        # Full-validation pre-box/decoder-stage metrics.  Zero disables the
+        # extra post-processing/evaluation pass; experiments opt in explicitly.
+        self.diagnostics_layerwise_epoch_interval: int = 0
         self.diagnostics_query_topk: int = 50
 
         # distillation: General distillation control switch

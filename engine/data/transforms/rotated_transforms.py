@@ -39,15 +39,20 @@ def _filter_instances(target, keep):
 
 
 @register()
-class RotatedResizePad(nn.Module):
-    """Keep aspect ratio, resize, and pad at the right/bottom."""
+class RotatedResize(nn.Module):
+    """Keep aspect ratio and resize without changing the image canvas early.
 
-    def __init__(self, size=(1024, 1024), fill=114, interpolation="bilinear"):
+    Rotation augmentation must see the resized image itself, not an already
+    padded square.  Otherwise a non-square image is rotated around the wrong
+    centre and its valid-content boundary no longer matches the source O²
+    training pipeline.
+    """
+
+    def __init__(self, size=(1024, 1024), interpolation="bilinear"):
         super().__init__()
         self.size = (size, size) if isinstance(size, int) else tuple(size)
         if len(self.size) != 2:
             raise ValueError("size must be (width, height)")
-        self.fill = fill
         self.interpolation = {
             "bilinear": Image.Resampling.BILINEAR,
             "bicubic": Image.Resampling.BICUBIC,
@@ -62,9 +67,7 @@ class RotatedResizePad(nn.Module):
         new_width = max(1, min(canvas_width, round(old_width * scale)))
         new_height = max(1, min(canvas_height, round(old_height * scale)))
         scale_x, scale_y = new_width / old_width, new_height / old_height
-        resized = image.resize((new_width, new_height), self.interpolation)
-        image = Image.new("RGB", self.size, color=(self.fill,) * 3)
-        image.paste(resized, (0, 0))
+        image = image.resize((new_width, new_height), self.interpolation)
 
         boxes = target["boxes"].clone()
         if boxes.numel():
@@ -78,11 +81,52 @@ class RotatedResizePad(nn.Module):
             boxes[:, 2:4] = target["boxes"][:, 2:4] * length_scale
         target["boxes"] = boxes
         target["area"] = boxes[:, 2] * boxes[:, 3]
-        target["size"] = torch.tensor([canvas_width, canvas_height], dtype=torch.int64)
+        target["size"] = torch.tensor([new_width, new_height], dtype=torch.int64)
         target["scale_factor"] = torch.tensor([scale_x, scale_y], dtype=torch.float32)
-        target["padding"] = torch.tensor(
-            [0, 0, canvas_width - new_width, canvas_height - new_height], dtype=torch.int64)
+        target["padding"] = torch.zeros(4, dtype=torch.int64)
         return image, target, dataset
+
+
+@register()
+class RotatedPad(nn.Module):
+    """Pad the right/bottom after all geometry-changing augmentation."""
+
+    def __init__(self, size=(1024, 1024), fill=114):
+        super().__init__()
+        self.size = (size, size) if isinstance(size, int) else tuple(size)
+        if len(self.size) != 2:
+            raise ValueError("size must be (width, height)")
+        self.fill = int(fill)
+
+    def forward(self, sample):
+        image, target, dataset = _unpack(sample)
+        old_width, old_height = image.size
+        canvas_width, canvas_height = self.size
+        if old_width > canvas_width or old_height > canvas_height:
+            raise ValueError(
+                "RotatedPad cannot crop an oversized image: "
+                f"image={(old_width, old_height)}, canvas={self.size}")
+        padded = Image.new("RGB", self.size, color=(self.fill,) * 3)
+        padded.paste(image, (0, 0))
+        target["size"] = torch.tensor(
+            [canvas_width, canvas_height], dtype=torch.int64)
+        target["padding"] = torch.tensor(
+            [0, 0, canvas_width - old_width, canvas_height - old_height],
+            dtype=torch.int64)
+        return padded, target, dataset
+
+
+@register()
+class RotatedResizePad(nn.Module):
+    """Keep aspect ratio, then pad at the right/bottom in one transform."""
+
+    def __init__(self, size=(1024, 1024), fill=114, interpolation="bilinear"):
+        super().__init__()
+        self.resize = RotatedResize(size=size, interpolation=interpolation)
+        self.pad = RotatedPad(size=size, fill=fill)
+
+    def forward(self, sample):
+        return self.pad(self.resize(sample))
 
 
 @register()
@@ -161,7 +205,7 @@ class RotatedRandomFlip(nn.Module):
 
 @register()
 class RotatedRandomRotate(nn.Module):
-    """Rotate the square canvas and boxes about its center."""
+    """Rotate the current image and boxes about its centre."""
 
     def __init__(self, p=0.5, angle_range=180.0, fill=114):
         super().__init__()

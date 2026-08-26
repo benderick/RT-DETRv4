@@ -58,11 +58,19 @@ class RotatedTransformerDecoder(TransformerDecoder):
         output_detach = pred_corners_undetach = angle_delta_undetach = 0
         value = self.value_op(memory, None, None, memory_mask, spatial_shapes)
         boxes_out, logits_out, corners_out, refs_out = [], [], [], []
+        raw_logits_out, lqe_delta_out, input_refs_out = [], [], []
         project = weighting_function(self.reg_max, up, reg_scale) \
             if not hasattr(self, "project") else self.project
         ref_points_detach = torch.sigmoid(ref_points_unact)
 
         for index, layer in enumerate(self.layers):
+            diagnostic_mode = bool(getattr(self, "diagnostic_mode", False))
+            if diagnostic_mode:
+                # This is the box that actually parameterizes the current
+                # decoder layer's query position and rotated cross-attention.
+                # It is deliberately distinct from ``initial_ref`` below,
+                # which remains the fixed D-FINE refinement anchor.
+                input_refs_out.append(ref_points_detach)
             ref_points_input = ref_points_detach.unsqueeze(2)
             query_position = query_pos_head(ref_points_detach).clamp(min=-10, max=10)
             if index >= self.eval_idx + 1 and self.layer_scale > 1:
@@ -100,12 +108,13 @@ class RotatedTransformerDecoder(TransformerDecoder):
                 refined_box = regularize_rboxes(
                     torch.cat((refined_xywh, refined_angle), dim=-1), normalized_angle=True)
 
-            diagnostic_mode = bool(getattr(self, "diagnostic_mode", False))
             if self.training or diagnostic_mode or index == self.eval_idx:
-                scores = self.lqe_layers[index](
-                    score_head[index](output), pred_corners
-                )
+                raw_scores = score_head[index](output)
+                scores = self.lqe_layers[index](raw_scores, pred_corners)
                 logits_out.append(scores)
+                if diagnostic_mode:
+                    raw_logits_out.append(raw_scores)
+                    lqe_delta_out.append(scores - raw_scores)
                 boxes_out.append(refined_box)
                 corners_out.append(pred_corners)
                 refs_out.append(initial_ref)
@@ -126,6 +135,9 @@ class RotatedTransformerDecoder(TransformerDecoder):
             torch.stack(refs_out),
             pre_boxes,
             pre_scores,
+            torch.stack(raw_logits_out) if raw_logits_out else None,
+            torch.stack(lqe_delta_out) if lqe_delta_out else None,
+            torch.stack(input_refs_out) if input_refs_out else None,
         )
 
 
@@ -166,6 +178,7 @@ class RotatedDFINETransformer(DFINETransformer):
             reg_scale=reg_scale, layer_scale=layer_scale, mlp_act=mlp_act)
         self.decoder.__class__ = RotatedTransformerDecoder
         self.decoder.diagnostic_mode = False
+        self.decoder.diagnostic_attention_mode = False
         refinement_mode = str(refinement_mode)
         supported_modes = {"direct_angle", "o2_adr"}
         if refinement_mode not in supported_modes:
@@ -198,15 +211,8 @@ class RotatedDFINETransformer(DFINETransformer):
             ])
             self.register_buffer(
                 "adr_project", o2_weighting_function(self.reg_max, adr_a, adr_c))
-            # Persistent representation signature: four external boundaries,
-            # two vertex offsets, and equal-diagonal rectangle completion.
-            # This is a geometry contract, not a historical version number.
-            self.register_buffer(
-                "adr_geometry_signature", torch.tensor([4, 2, 1], dtype=torch.int32))
         else:
-            # The explicit direct-angle variant preserves the original
-            # parameter names and shapes, so its existing checkpoints still
-            # load strictly without affecting the primary O² architecture.
+            # Direct-angle is the explicit scalar-angle architectural control.
             self.dec_angle_head = nn.ModuleList(
                 [MLP(hidden_dim, hidden_dim, 1, 3, act=mlp_act)
                  for _ in range(self.eval_idx + 1)] +
@@ -253,15 +259,22 @@ class RotatedDFINETransformer(DFINETransformer):
                 self.dec_angle_head[i] if i <= self.eval_idx else nn.Identity()
                 for i in range(len(self.dec_angle_head))])
 
-    def set_diagnostic_mode(self, enabled=True):
+    def set_diagnostic_mode(self, enabled=True, capture_attention=None):
         """Expose per-decoder-layer predictions during evaluation.
 
         This is deliberately opt-in so deployment and ordinary inference keep
-        exactly the same output contract and memory footprint.
+        exactly the same output contract and memory footprint.  Layer outputs
+        and cross-attention traces are controlled separately because the latter
+        are much larger and are needed only for a deterministic image subset.
         """
-        self.decoder.diagnostic_mode = bool(enabled)
+        enabled = bool(enabled)
+        if capture_attention is None:
+            capture_attention = enabled
+        capture_attention = bool(capture_attention) and enabled
+        self.decoder.diagnostic_mode = enabled
+        self.decoder.diagnostic_attention_mode = capture_attention
         for layer in self.decoder.layers:
-            layer.cross_attn.diagnostic_mode = bool(enabled)
+            layer.cross_attn.diagnostic_mode = capture_attention
         return self
 
     def _decode_queries(
@@ -321,7 +334,8 @@ class RotatedDFINETransformer(DFINETransformer):
                 decoded_refs, normalized_angle=True)
         refs = inverse_sigmoid(decoded_refs.clamp(1e-5, 1 - 1e-5))
         enc_boxes = [regularize_rboxes(boxes, normalized_angle=True) for boxes in enc_boxes]
-        out_boxes, out_logits, out_corners, out_refs, pre_boxes, pre_logits = \
+        (out_boxes, out_logits, out_corners, out_refs, pre_boxes, pre_logits,
+         out_raw_logits, out_lqe_delta, out_input_refs) = \
             self._decode_queries(
             content, refs, memory, spatial_shapes, attention_mask, dn_meta
         )
@@ -355,8 +369,11 @@ class RotatedDFINETransformer(DFINETransformer):
                 result["diagnostic_pre_logits"] = pre_logits
                 result["diagnostic_pre_boxes"] = pre_boxes
                 result["diagnostic_layer_logits"] = out_logits
+                result["diagnostic_layer_class_logits_before_lqe"] = out_raw_logits
+                result["diagnostic_layer_lqe_logit_delta"] = out_lqe_delta
                 result["diagnostic_layer_boxes"] = out_boxes
-                result["diagnostic_layer_refs"] = out_refs
+                result["diagnostic_layer_anchors"] = out_refs
+                result["diagnostic_layer_input_refs"] = out_input_refs
                 result["diagnostic_layer_distributions"] = out_corners
                 result["diagnostic_refinement_kind"] = (
                     "adr" if self.use_adr else "fdr_angle")
@@ -372,12 +389,14 @@ class RotatedDFINETransformer(DFINETransformer):
                         out_corners, self.adr_project, components=6)
                     adr_values = apply_adr_residuals(out_refs, adr_residuals)
                     result["diagnostic_layer_adr_residuals"] = adr_residuals
+                    result["diagnostic_layer_adr_values"] = adr_values
                     result["diagnostic_layer_adr_raw_orthogonality_error"] = \
                         adr_orthogonality_error(adr_values)
                     result["diagnostic_adr_geometry_contract"] = \
                         "dfine4_plus_vertex2_equal_diagonal"
                 active_layers = self.decoder.layers[:len(out_boxes)]
-                if active_layers and all(
+                if bool(getattr(self.decoder, "diagnostic_attention_mode", False)) and \
+                        active_layers and all(
                         hasattr(layer.cross_attn, "last_sampling_locations")
                         for layer in active_layers):
                     result["diagnostic_sampling_locations"] = torch.stack([

@@ -84,9 +84,9 @@ class RotatedPostProcessor(nn.Module):
             if not len(candidates) or not len(retained):
                 continue
             overlaps = rotated_iou(
-                boxes[candidates], boxes[retained], normalized_angle=False)
+                boxes[candidates], boxes[retained], model_space=False)
             higher_score = scores[retained][None, :] >= scores[candidates][:, None]
-            eligible = higher_score & (overlaps >= self.nms_iou_threshold)
+            eligible = higher_score & (overlaps > self.nms_iou_threshold)
             has_parent = eligible.any(dim=1)
             first_parent = eligible.to(torch.int8).argmax(dim=1)
             parent[candidates[has_parent]] = retained[first_parent[has_parent]]

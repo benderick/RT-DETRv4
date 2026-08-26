@@ -25,6 +25,11 @@ from engine.rtv4.rotated_denoising import (
     apply_ocd_probability_noise,
     get_rotated_contrastive_denoising_training_group,
 )
+from tools.research.o2.run_acceptance import (
+    O2_DFINE_M_PARAMETER_RANGE,
+    _decoder_contract_differences,
+    _source_aligned_config_contract,
+)
 
 
 def _tiny_o2_model(num_denoising=10):
@@ -74,6 +79,22 @@ class O2ADRTest(unittest.TestCase):
         overlap = rotated_iou(recovered, target, aligned=True)
         torch.testing.assert_close(overlap, torch.ones_like(overlap), atol=1e-4, rtol=1e-4)
 
+    def test_zero_adr_residual_reconstructs_random_reference_geometry(self):
+        torch.manual_seed(23)
+        references = torch.cat((
+            torch.rand(256, 2) * .8 + .1,
+            torch.rand(256, 2) * .35 + .005,
+            torch.rand(256, 1),
+        ), dim=-1)
+        residual = adr_target_residual(references, references)
+        recovered = adr_to_rbox(references, residual)
+        overlaps = rotated_iou(
+            recovered, references, aligned=True, model_space=True)
+        torch.testing.assert_close(
+            residual, torch.zeros_like(residual), atol=1e-7, rtol=0)
+        torch.testing.assert_close(
+            overlaps, torch.ones_like(overlaps), atol=1e-5, rtol=0)
+
     def test_adr_model_forward_loss_backward_and_instability_log(self):
         model = _tiny_o2_model()
         features = [
@@ -99,12 +120,13 @@ class O2ADRTest(unittest.TestCase):
         matcher = RotatedHungarianMatcher({
             "cost_class": 2, "cost_bbox": 0, "cost_angle": 0,
             "cost_kld": 2, "cost_chamfer": 5,
-        }, chamfer_distance="released_l2")
+        })
         criterion = RotatedRTv4Criterion(
             matcher,
-            {"loss_focal": 1, "loss_bbox": 5, "loss_angle": 5,
+            {"loss_vfl": 1, "loss_bbox": 5, "loss_angle": 5,
              "loss_kld": 2, "loss_fgl": 0.15},
-            num_classes=3, reg_max=8,
+            losses=("vfl", "boxes", "local"),
+            alpha=.75, num_classes=3, reg_max=8,
         )
         losses = criterion(outputs, targets, collect_diagnostics=True)
         total = sum(losses.values())
@@ -140,6 +162,22 @@ class O2ADRTest(unittest.TestCase):
         )
         self.assertEqual(
             outputs["diagnostic_layer_adr_residuals"].shape[-1], 6)
+        self.assertEqual(
+            outputs["diagnostic_layer_adr_values"].shape[-1], 6)
+        torch.testing.assert_close(
+            outputs["diagnostic_layer_input_refs"][1:],
+            outputs["diagnostic_layer_boxes"][:-1], atol=0, rtol=0)
+        torch.testing.assert_close(
+            outputs["diagnostic_layer_anchors"],
+            outputs["diagnostic_pre_boxes"].unsqueeze(0).expand_as(
+                outputs["diagnostic_layer_anchors"]),
+            atol=0, rtol=0,
+        )
+        torch.testing.assert_close(
+            outputs["diagnostic_layer_logits"] -
+            outputs["diagnostic_layer_class_logits_before_lqe"],
+            outputs["diagnostic_layer_lqe_logit_delta"],
+        )
 
     def test_exact_instability_fraction(self):
         targets = [{"labels": torch.tensor([0, 0, 0])}]
@@ -153,15 +191,11 @@ class O2ADRTest(unittest.TestCase):
 
 
 class O2MatchingAndDenoisingTest(unittest.TestCase):
-    def test_squared_chamfer_matches_paper_definition(self):
+    def test_chamfer_matches_the_released_o2_definition(self):
         first = torch.tensor([[0.5, 0.5, 0.2, 0.1, 0.0]])
         second = torch.tensor([[0.51, 0.5, 0.2, 0.1, 0.0]])
-        squared = pairwise_chamfer_cost(
-            first, second, distance_mode="paper_squared")
-        self.assertAlmostEqual(float(squared), 2 * 0.01 ** 2, places=7)
-        ordinary = pairwise_chamfer_cost(
-            first, second, distance_mode="released_l2")
-        self.assertAlmostEqual(float(ordinary), 2 * 0.01, places=6)
+        distance = pairwise_chamfer_cost(first, second)
+        self.assertAlmostEqual(float(distance), 2 * 0.01, places=6)
 
     def test_ocd_box_positive_and_negative_ranges(self):
         torch.manual_seed(7)
@@ -266,6 +300,16 @@ class O2RotatedAttentionTest(unittest.TestCase):
         self.assertEqual(outputs["diagnostic_sampling_rotated_offsets"].shape[-1], 2)
         self.assertEqual(tuple(outputs["diagnostic_sampling_points_per_level"]), (2, 2, 2))
 
+    def test_layer_outputs_do_not_require_expensive_attention_traces(self):
+        model = _tiny_o2_model(num_denoising=0).eval().set_diagnostic_mode(
+            True, capture_attention=False)
+        features = [torch.randn(1, 32, 8, 8), torch.randn(1, 32, 4, 4),
+                    torch.randn(1, 32, 2, 2)]
+        outputs = model(features)
+        self.assertIn("diagnostic_layer_boxes", outputs)
+        self.assertIn("diagnostic_layer_input_refs", outputs)
+        self.assertNotIn("diagnostic_sampling_locations", outputs)
+
 
 class O2ConfigurationTest(unittest.TestCase):
     ROOT = Path(__file__).resolve().parents[3]
@@ -273,25 +317,27 @@ class O2ConfigurationTest(unittest.TestCase):
     def test_four_established_public_variants_have_exact_semantics(self):
         expected = (
             ("dfine_obb_angle.yml", "direct_angle", "standard", 100, 0.5,
-             "released_l2", True,
-             "DotaOBBEvaluator"),
+             False, "DotaOBBEvaluator"),
             ("dfine_obb_o2.yml", "o2_adr", "box", 100, 5.0,
-             "released_l2", False,
-             "DotaOBBEvaluator"),
+             False, "DotaOBBEvaluator"),
             ("dfine_obb_angle_tile.yml", "direct_angle", "standard", 100, 0.5,
-             "released_l2", True,
-             "MergedDotaOBBEvaluator"),
+             True, "MergedDotaOBBEvaluator"),
             ("dfine_obb_o2_tile.yml", "o2_adr", "box", 100, 5.0,
-             "released_l2", True,
-             "MergedDotaOBBEvaluator"),
+             True, "MergedDotaOBBEvaluator"),
         )
         config_dir = self.ROOT / "configs" / "dfine"
+        common_base = self.ROOT / "configs" / "base" / "dfine_obb.yml"
+        self.assertTrue(common_base.is_file())
+        self.assertNotIn(
+            "dfine_obb_angle.yml",
+            (config_dir / "dfine_obb_o2.yml").read_text(encoding="utf-8"),
+        )
         self.assertEqual(
             {path.name for path in config_dir.glob("*obb*.yml")
              if "stage" not in path.name},
             {item[0] for item in expected},
         )
-        for (name, refinement_mode, mode, count, chamfer, distance,
+        for (name, refinement_mode, mode, count, chamfer,
              apply_nms, evaluator) in expected:
             self.assertNotIn("codrone", name)
             self.assertNotIn("hgnet", name)
@@ -299,21 +345,50 @@ class O2ConfigurationTest(unittest.TestCase):
             config = YAMLConfig(str(self.ROOT / "configs" / "dfine" / name))
             decoder = config.yaml_cfg["RotatedDFINETransformer"]
             matcher = config.yaml_cfg["RotatedRTv4Criterion"]["matcher"]
+            optimizer = config.yaml_cfg["optimizer"]
             self.assertEqual(decoder["refinement_mode"], refinement_mode)
             self.assertNotIn("use_adr", decoder)
+            self.assertEqual(decoder["num_queries"], 300)
+            self.assertEqual(decoder["num_layers"], 4)
+            self.assertTrue(decoder.get("aux_loss", True))
             self.assertEqual(decoder["ocd_mode"], mode)
             self.assertEqual(decoder["num_denoising"], count)
+            self.assertEqual(config.yaml_cfg["HGNetv2"]["name"], "B2")
+            self.assertEqual(config.yaml_cfg["HybridEncoder"]["expansion"], 1.0)
+            self.assertEqual(config.yaml_cfg["HybridEncoder"]["depth_mult"], .67)
+            self.assertEqual(config.yaml_cfg["num_top_queries"], 300)
+            self.assertEqual(config.yaml_cfg["epoches"], 72)
+            self.assertEqual(
+                config.yaml_cfg["train_dataloader"]["total_batch_size"], 8)
+            self.assertEqual(optimizer["lr"], 5e-5)
+            self.assertEqual(optimizer["params"][0]["lr"], 5e-6)
+            self.assertEqual(optimizer["weight_decay"], 1e-4)
+            self.assertEqual(
+                config.yaml_cfg["lr_scheduler"]["milestones"], [500])
             self.assertEqual(matcher["weight_dict"]["cost_chamfer"], chamfer)
-            self.assertEqual(matcher["chamfer_distance"], distance)
+            self.assertNotIn("chamfer_distance", matcher)
             self.assertEqual(
                 config.yaml_cfg["RotatedPostProcessor"].get("apply_nms", True),
                 apply_nms)
             self.assertEqual(config.postprocessor.apply_nms, apply_nms)
             self.assertEqual(config.yaml_cfg["evaluator"]["type"], evaluator)
+            transform_types = tuple(
+                operation["type"]
+                for operation in config.yaml_cfg["train_dataloader"]
+                ["dataset"]["transforms"]["ops"])
+            self.assertEqual(transform_types, (
+                "RotatedResize",
+                "RotatedRandomFlip",
+                "RotatedRandomRotate",
+                "RotatedSanitizeBoxes",
+                "RotatedPad",
+                "RotatedConvertToTensor",
+            ))
             criterion = config.yaml_cfg["RotatedRTv4Criterion"]
+            self.assertEqual(criterion["losses"], ["vfl", "boxes", "local"])
+            self.assertEqual(criterion["alpha"], .75)
+            self.assertEqual(criterion["weight_dict"]["loss_vfl"], 1.0)
             if refinement_mode == "o2_adr":
-                self.assertEqual(criterion["angle_loss_mode"], "periodic_pi")
-                self.assertEqual(criterion["square_anisotropy_threshold"], 0.0)
                 self.assertNotIn("amp_abort_min_scale", config.yaml_cfg)
 
     def test_direct_angle_variant_has_a_real_scalar_angle_head(self):
@@ -328,12 +403,39 @@ class O2ConfigurationTest(unittest.TestCase):
         self.assertTrue(all(head.layers[-1].out_features == 1
                             for head in model.dec_angle_head))
         self.assertEqual(model.dec_bbox_head[0].layers[-1].out_features, 4 * 9)
-        self.assertNotIn("adr_geometry_signature", model.state_dict())
 
-    def test_o2_checkpoint_records_geometry_contract(self):
-        model = _tiny_o2_model(num_denoising=0)
-        self.assertEqual(model.adr_geometry_signature.tolist(), [4, 2, 1])
-        self.assertIn("adr_geometry_signature", model.state_dict())
+    def test_uav_recipe_satisfies_the_runtime_training_contract(self):
+        config = YAMLConfig(str(
+            self.ROOT / "configs" / "experiments" / "uav_rod" /
+            "dfine_obb_o2.yml"))
+        contract = _source_aligned_config_contract(config.yaml_cfg)
+        self.assertEqual(contract["status"], "PASS")
+        self.assertEqual(contract["differences"], {})
+        self.assertTrue(contract["actual"]["auxiliary_training"])
+
+        parameter_count = sum(
+            parameter.numel() for parameter in config.model.parameters())
+        minimum_parameters, maximum_parameters = O2_DFINE_M_PARAMETER_RANGE
+        self.assertGreaterEqual(parameter_count, minimum_parameters)
+        self.assertLess(parameter_count, maximum_parameters)
+
+    def test_real_forward_tensors_satisfy_decoder_acceptance_contract(self):
+        model = _tiny_o2_model(num_denoising=0).eval().set_diagnostic_mode(
+            True, capture_attention=False)
+        features = [
+            torch.randn(1, 32, 8, 8),
+            torch.randn(1, 32, 4, 4),
+            torch.randn(1, 32, 2, 2),
+        ]
+        with torch.inference_mode():
+            outputs = model(features)
+        differences = _decoder_contract_differences(outputs)
+        self.assertEqual(differences, {
+            "max_fixed_anchor_difference": 0.0,
+            "max_reference_chain_difference": 0.0,
+            "max_adr_reconstruction_corner_difference": 0.0,
+            "max_lqe_identity_difference": 0.0,
+        })
 
 if __name__ == "__main__":
     unittest.main()

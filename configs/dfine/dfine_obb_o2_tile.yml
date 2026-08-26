@@ -8,3 +8,9 @@ output_dir: ./logs/dfine_obb_o2_tile
 
 RotatedPostProcessor:
   apply_nms: True
+
+train_dataloader:
+  total_batch_size: 8
+
+val_dataloader:
+  total_batch_size: 8

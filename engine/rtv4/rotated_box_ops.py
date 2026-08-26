@@ -1,4 +1,4 @@
-"""Rotated bounding-box geometry used by the CODrone OBB baseline.
+"""Shared rotated bounding-box geometry.
 
 The model-facing convention is ``(cx, cy, w, h, angle / pi)`` where the
 first four values are normalized by the image width/height, the angle is in
@@ -16,6 +16,9 @@ from torch import Tensor
 
 
 ANGLE_PERIOD = math.pi
+
+_ROTATED_IOU_PAIR_CHUNK = 65536
+_GEOMETRY_TOLERANCE = 1e-10
 
 
 def _empty_like(boxes: Tensor, last_dim: int) -> Tensor:
@@ -126,7 +129,7 @@ def _postprocess_distance(
     ``sqrt`` belongs to KLD itself and is deliberately applied before
     ``fun``.  O^2's released configurations use
     ``sqrt=False, fun='log1p', tau=1``. Other choices remain explicit
-    experiment settings rather than implicit historical fallbacks.
+    experiment settings.
     """
 
     if sqrt:
@@ -218,75 +221,237 @@ def pairwise_kld_cost(
         p, t, normalized_angle, sqrt=sqrt, fun=fun, tau=tau)
 
 
-CHAMFER_DISTANCE_MODES = ("paper_squared", "released_l2")
-
-
 def pairwise_chamfer_cost(
     pred: Tensor,
     target: Tensor,
     normalized_angle: bool = True,
-    *,
-    distance_mode: str = "released_l2",
 ) -> Tensor:
-    """Bidirectional mean corner Chamfer distance.
+    """Bidirectional mean Euclidean corner Chamfer distance.
 
-    ``paper_squared`` follows O²-DFINE Eq. 10. ``released_l2`` follows the
-    publicly released O²-RTDETR ``ChamferCost``, which uses Euclidean norms.
-    They are intentionally named because the paper and released source differ.
+    This is the executable definition in the authors' released O² detector.
     """
-    if distance_mode not in CHAMFER_DISTANCE_MODES:
-        raise ValueError(
-            f"Unknown Chamfer distance mode {distance_mode!r}; "
-            f"expected one of {CHAMFER_DISTANCE_MODES}")
     if pred.shape[0] == 0 or target.shape[0] == 0:
         return pred.new_zeros((pred.shape[0], target.shape[0]))
     corners1 = rbox_to_corners(pred, normalized_angle=normalized_angle)
     corners2 = rbox_to_corners(target, normalized_angle=normalized_angle)
     delta = corners1[:, None, :, None, :] - corners2[None, :, None, :, :]
-    distances = delta.square().sum(dim=-1) if distance_mode == "paper_squared" \
-        else torch.linalg.vector_norm(delta, dim=-1)
+    distances = torch.linalg.vector_norm(delta, dim=-1)
     return distances.min(dim=-1).values.mean(dim=-1) + \
         distances.min(dim=-2).values.mean(dim=-1)
 
 
+def _cross_2d(first: Tensor, second: Tensor) -> Tensor:
+    return first[..., 0] * second[..., 1] - first[..., 1] * second[..., 0]
+
+
+def _quadrilateral_area(corners: Tensor) -> Tensor:
+    return 0.5 * _cross_2d(
+        corners, torch.roll(corners, shifts=-1, dims=-2)).sum(dim=-1).abs()
+
+
+def _points_inside_quadrilateral(points: Tensor, polygon: Tensor) -> Tensor:
+    """Return a mask for convex quadrilaterals in either winding order."""
+
+    edges = torch.roll(polygon, shifts=-1, dims=-2) - polygon
+    relative = points.unsqueeze(-2) - polygon.unsqueeze(-3)
+    sides = _cross_2d(edges.unsqueeze(-3), relative)
+    return ((sides >= -_GEOMETRY_TOLERANCE).all(dim=-1) |
+            (sides <= _GEOMETRY_TOLERANCE).all(dim=-1))
+
+
+def _aligned_quadrilateral_iou(first: Tensor, second: Tensor) -> Tensor:
+    """Robust IoU for aligned convex quadrilateral pairs.
+
+    Every pair is translated and isotropically normalized before geometric
+    predicates are evaluated in float64.  Its intersection polygon consists
+    exactly of contained corners and segment intersections; sorting those
+    candidates around their centroid then gives its area.  This avoids the
+    coincident-edge failure of float32 rotated-box kernels, where two boxes
+    differing by only a few ulps can incorrectly return IoU 0 or 1/3.
+    """
+
+    if first.shape != second.shape or first.shape[-2:] != (4, 2):
+        raise ValueError(
+            "Aligned quadrilateral IoU expects equal (..., 4, 2) shapes")
+    if not len(first):
+        return first.new_empty(0)
+
+    first = first.to(torch.float64)
+    second = second.to(torch.float64)
+    combined = torch.cat((first, second), dim=-2)
+    origin = combined.mean(dim=-2, keepdim=True)
+    span = (combined.amax(dim=-2) - combined.amin(dim=-2)).amax(dim=-1)
+    scale = span.clamp_min(torch.finfo(torch.float64).tiny)
+    first = (first - origin) / scale[:, None, None]
+    second = (second - origin) / scale[:, None, None]
+
+    first_inside = _points_inside_quadrilateral(first, second)
+    second_inside = _points_inside_quadrilateral(second, first)
+
+    first_start = first[:, :, None, :]
+    first_edge = (
+        torch.roll(first, shifts=-1, dims=-2) - first)[:, :, None, :]
+    second_start = second[:, None, :, :]
+    second_edge = (
+        torch.roll(second, shifts=-1, dims=-2) - second)[:, None, :, :]
+    denominator = _cross_2d(first_edge, second_edge)
+    relative_start = second_start - first_start
+    nonparallel = denominator.abs() > 1e-14
+    safe_denominator = torch.where(
+        nonparallel, denominator, torch.ones_like(denominator))
+    first_fraction = _cross_2d(relative_start, second_edge) / safe_denominator
+    second_fraction = _cross_2d(relative_start, first_edge) / safe_denominator
+    intersects = (
+        nonparallel &
+        (first_fraction >= -_GEOMETRY_TOLERANCE) &
+        (first_fraction <= 1.0 + _GEOMETRY_TOLERANCE) &
+        (second_fraction >= -_GEOMETRY_TOLERANCE) &
+        (second_fraction <= 1.0 + _GEOMETRY_TOLERANCE)
+    )
+    intersections = first_start + first_fraction[..., None] * first_edge
+
+    candidates = torch.cat((
+        first,
+        second,
+        intersections.reshape(len(first), 16, 2),
+    ), dim=-2)
+    valid = torch.cat((
+        first_inside,
+        second_inside,
+        intersects.reshape(len(first), 16),
+    ), dim=-1)
+    count = valid.sum(dim=-1)
+    centroid = (
+        (candidates * valid[..., None]).sum(dim=-2) /
+        count.clamp_min(1)[..., None]
+    )
+    angles = torch.atan2(
+        candidates[..., 1] - centroid[:, None, 1],
+        candidates[..., 0] - centroid[:, None, 0],
+    )
+    angles = torch.where(
+        valid, angles, torch.full_like(angles, torch.inf))
+    order = angles.argsort(dim=-1)
+    ordered = candidates.gather(
+        -2, order[..., None].expand(-1, -1, 2))
+    ordered_valid = valid.gather(-1, order)
+
+    adjacent_valid = ordered_valid[:, :-1] & ordered_valid[:, 1:]
+    signed_twice_area = (
+        _cross_2d(ordered[:, :-1], ordered[:, 1:]) * adjacent_valid
+    ).sum(dim=-1)
+    last_index = (count - 1).clamp_min(0)
+    last = ordered.gather(
+        1, last_index[:, None, None].expand(-1, 1, 2)).squeeze(1)
+    signed_twice_area += _cross_2d(last, ordered[:, 0]) * (count >= 2)
+    intersection = torch.where(
+        count >= 3,
+        0.5 * signed_twice_area.abs(),
+        torch.zeros_like(signed_twice_area),
+    )
+    first_area = _quadrilateral_area(first)
+    second_area = _quadrilateral_area(second)
+    intersection = torch.minimum(intersection, torch.minimum(first_area, second_area))
+    union = (first_area + second_area - intersection).clamp_min(
+        torch.finfo(torch.float64).tiny)
+    return (intersection / union).clamp(0.0, 1.0)
+
+
+@torch.no_grad()
 def rotated_iou(boxes1: Tensor, boxes2: Tensor, aligned: bool = False,
-                normalized_angle: bool = True) -> Tensor:
-    """Rotated IoU backed by MMCV's tested CPU/CUDA operator."""
-    try:
-        from mmcv.ops import box_iou_rotated
-    except ImportError as exc:  # pragma: no cover - explicit runtime diagnosis
-        raise RuntimeError(
-            "OBB geometry requires MMCV built with rotated ops (box_iou_rotated).") from exc
-    if boxes1.shape[0] == 0 or boxes2.shape[0] == 0:
-        shape = (boxes1.shape[0],) if aligned else (boxes1.shape[0], boxes2.shape[0])
-        return boxes1.new_zeros(shape)
-    b1 = boxes1.clone()
-    b2 = boxes2.clone()
-    if normalized_angle:
-        b1[..., 4] *= ANGLE_PERIOD
-        b2[..., 4] *= ANGLE_PERIOD
-    overlaps = box_iou_rotated(b1.float(), b2.float(), aligned=aligned, clockwise=True)
-    return overlaps.to(dtype=boxes1.dtype)
+                model_space: bool = True) -> Tensor:
+    """Numerically robust rotated IoU with an explicit coordinate contract.
+
+    ``model_space=True`` accepts normalized ``(cx, cy, w, h, theta / pi)``;
+    ``model_space=False`` accepts original-image pixels and radians.  The
+    result is computed from convex polygons in pair-normalized float64 space,
+    making pixel/model results invariant to translation and common scale.
+    """
+
+    if boxes1.ndim != 2 or boxes2.ndim != 2 or \
+            boxes1.shape[-1] != 5 or boxes2.shape[-1] != 5:
+        raise ValueError(
+            "Rotated IoU expects two matrices shaped (num_boxes, 5)")
+    if boxes1.device != boxes2.device:
+        raise ValueError("Rotated IoU inputs must be on the same device")
+    if aligned and len(boxes1) != len(boxes2):
+        raise ValueError("Aligned rotated IoU requires equal box counts")
+    output_shape = (len(boxes1),) if aligned else (len(boxes1), len(boxes2))
+    if not len(boxes1) or not len(boxes2):
+        return boxes1.new_zeros(output_shape)
+
+    # Promote before trigonometry and centre-plus-corner construction.  A
+    # float64 polygon kernel cannot recover a thin edge that was already lost
+    # while forming float32 corners at large pixel coordinates.
+    first_corners = rbox_to_corners(
+        boxes1.to(torch.float64), normalized_angle=model_space)
+    second_corners = rbox_to_corners(
+        boxes2.to(torch.float64), normalized_angle=model_space)
+    values = []
+    if aligned:
+        for start in range(0, len(boxes1), _ROTATED_IOU_PAIR_CHUNK):
+            end = min(start + _ROTATED_IOU_PAIR_CHUNK, len(boxes1))
+            values.append(_aligned_quadrilateral_iou(
+                first_corners[start:end], second_corners[start:end]))
+    else:
+        pair_count = len(boxes1) * len(boxes2)
+        for start in range(0, pair_count, _ROTATED_IOU_PAIR_CHUNK):
+            end = min(start + _ROTATED_IOU_PAIR_CHUNK, pair_count)
+            flat_index = torch.arange(start, end, device=boxes1.device)
+            first_index = torch.div(
+                flat_index, len(boxes2), rounding_mode="floor")
+            second_index = torch.remainder(flat_index, len(boxes2))
+            values.append(_aligned_quadrilateral_iou(
+                first_corners[first_index], second_corners[second_index]))
+    return torch.cat(values).reshape(output_shape).to(dtype=boxes1.dtype)
 
 
 def class_aware_rotated_nms(boxes: Tensor, scores: Tensor, labels: Tensor,
                             iou_threshold: float, max_output: int | None = None) -> Tensor:
-    """Return score-sorted indices after per-class rotated NMS."""
-    try:
-        from mmcv.ops import nms_rotated
-    except ImportError as exc:  # pragma: no cover
-        raise RuntimeError(
-            "CODrone OBB requires MMCV built with rotated ops (nms_rotated).") from exc
+    """Return score-sorted indices after robust per-class rotated NMS."""
+
+    if not 0.0 <= iou_threshold <= 1.0:
+        raise ValueError("Rotated NMS IoU threshold must be in [0, 1]")
     keeps = []
     for label in labels.unique(sorted=True):
         class_idx = torch.nonzero(labels == label, as_tuple=False).squeeze(1)
         if class_idx.numel() == 0:
             continue
-        _, local_keep = nms_rotated(
-            boxes[class_idx].float(), scores[class_idx].float(), iou_threshold)
-        keeps.append(class_idx[local_keep])
+        order = torch.argsort(scores[class_idx], descending=True, stable=True)
+        class_boxes = boxes[class_idx]
+        corners = rbox_to_corners(
+            class_boxes.to(torch.float64), normalized_angle=False)
+        bounds_min = corners.amin(dim=-2)
+        bounds_max = corners.amax(dim=-2)
+        local_keep = []
+        while len(order):
+            current = order[0]
+            local_keep.append(current)
+            rest = order[1:]
+            if not len(rest):
+                break
+            # Axis-aligned support boxes are an exact broad phase: rotated
+            # rectangles with disjoint supports cannot overlap.
+            support_overlap = (
+                (bounds_min[rest, 0] <= bounds_max[current, 0]) &
+                (bounds_max[rest, 0] >= bounds_min[current, 0]) &
+                (bounds_min[rest, 1] <= bounds_max[current, 1]) &
+                (bounds_max[rest, 1] >= bounds_min[current, 1])
+            )
+            suppress = torch.zeros_like(support_overlap)
+            candidates = torch.nonzero(
+                support_overlap, as_tuple=False).squeeze(1)
+            if len(candidates):
+                overlaps = rotated_iou(
+                    class_boxes[current].unsqueeze(0),
+                    class_boxes[rest[candidates]],
+                    model_space=False,
+                )[0]
+                suppress[candidates] = overlaps > iou_threshold
+            order = rest[~suppress]
+        keeps.append(class_idx[torch.stack(local_keep)])
     if not keeps:
         return labels.new_empty((0,), dtype=torch.long)
     keep = torch.cat(keeps)
-    keep = keep[torch.argsort(scores[keep], descending=True)]
+    keep = keep[torch.argsort(scores[keep], descending=True, stable=True)]
     return keep[:max_output] if max_output is not None else keep

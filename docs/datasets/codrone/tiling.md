@@ -56,7 +56,7 @@ CUDA_VISIBLE_DEVICES=0 python tools/inference/obb_tile_infer.py \
   --output ./tile_test_predictions
 ```
 
-direct-angle 对照将配置和日志目录中的 `o2` 换成 `angle`。两条路径均为 30 epoch、
+direct-angle 对照将配置和日志目录中的 `o2` 换成 `angle`。两条路径均为 72 epochs、
 同 HGNetv2-B2 容量、无 Mosaic/MixUp/batch multi-scale。选择 epoch 或超参数不得
 查看测试集指标。
 

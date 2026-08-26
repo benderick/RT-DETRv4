@@ -9,7 +9,7 @@ import torchvision
 
 from ..core import register
 from ..misc.dist_utils import get_world_size, is_dist_available_and_initialized
-from .box_ops import box_cxcywh_to_xyxy
+from .box_ops import box_cxcywh_to_xyxy, box_iou
 from .dfine_utils import bbox2distance
 from .obb.methods.o2.adr import (
     adr_orthogonality_error,
@@ -42,8 +42,6 @@ class RotatedRTv4Criterion(nn.Module):
         kld_sqrt=False,
         kld_fun="log1p",
         kld_tau=1.0,
-        angle_loss_mode="periodic_pi",
-        square_anisotropy_threshold=0.05,
     ):
         super().__init__()
         self.matcher = matcher
@@ -57,16 +55,8 @@ class RotatedRTv4Criterion(nn.Module):
         self.kld_sqrt = bool(kld_sqrt)
         self.kld_fun = str(kld_fun)
         self.kld_tau = float(kld_tau)
-        self.angle_loss_mode = str(angle_loss_mode)
-        self.square_anisotropy_threshold = float(square_anisotropy_threshold)
         if self.kld_fun not in {"log1p", "sqrt", "none"}:
             raise ValueError(f"Unsupported KLD post-processing function: {self.kld_fun!r}")
-        if self.angle_loss_mode not in {"periodic_pi", "square_aware_soft"}:
-            raise ValueError(
-                "angle_loss_mode must be 'periodic_pi' (paper/released baseline) "
-                "or 'square_aware_soft' (symmetry-aware extension)")
-        if self.square_anisotropy_threshold < 0:
-            raise ValueError("square_anisotropy_threshold must be non-negative")
         self.last_diagnostics = None
         self.last_nonfinite_losses = None
 
@@ -95,6 +85,31 @@ class RotatedRTv4Criterion(nn.Module):
             torch.distributed.all_reduce(value)
         return torch.clamp(value / get_world_size(), min=1).item()
 
+    @staticmethod
+    def _aligned_xywh_quality(pred_boxes, target_boxes):
+        """Return the source-aligned D-FINE localization quality.
+
+        D-FINE weights FGL with the aligned IoU obtained by interpreting the
+        first four ``(cx, cy, w, h)`` parameters as horizontal boxes.  Every
+        released O²-RTDETR recipe makes the same explicit ``hbox_iou`` choice.
+        O²-DFINE does not publish decoder source, so inheriting this quality
+        definition is the only choice supported independently by both parent
+        implementations.  Rotation quality remains supervised by L1/KLD and
+        is reported separately with rotated IoU in diagnostics/evaluation.
+        """
+
+        if pred_boxes.shape != target_boxes.shape or pred_boxes.shape[-1] != 5:
+            raise ValueError(
+                "Aligned OBB quality expects equal (..., 5) tensors, got "
+                f"{tuple(pred_boxes.shape)} and {tuple(target_boxes.shape)}")
+        if pred_boxes.numel() == 0:
+            return pred_boxes.new_empty(pred_boxes.shape[:-1])
+        overlaps, _ = box_iou(
+            box_cxcywh_to_xyxy(pred_boxes.reshape(-1, 5)[:, :4]),
+            box_cxcywh_to_xyxy(target_boxes.reshape(-1, 5)[:, :4]),
+        )
+        return overlaps.diagonal().reshape(pred_boxes.shape[:-1])
+
     def _classification_loss(self, outputs, targets, indices, normalizer, kind):
         logits = outputs["pred_logits"]
         matched, target_boxes, target_labels = self._matched_tensors(outputs, targets, indices)
@@ -106,7 +121,9 @@ class RotatedRTv4Criterion(nn.Module):
             quality = torch.zeros(logits.shape[:2], device=logits.device, dtype=logits.dtype)
             if len(target_boxes):
                 pred_boxes = outputs["pred_boxes"][matched].detach()
-                quality[matched] = rotated_iou(pred_boxes, target_boxes, aligned=True).clamp(0, 1)
+                matched_quality = self._aligned_xywh_quality(
+                    pred_boxes, target_boxes).clamp(0, 1)
+                quality[matched] = matched_quality.to(dtype=quality.dtype)
             target_score = quality.unsqueeze(-1) * one_hot
             prediction_score = logits.sigmoid().detach()
             weight = self.alpha * prediction_score.pow(self.gamma) * (1 - one_hot) + target_score
@@ -118,38 +135,17 @@ class RotatedRTv4Criterion(nn.Module):
         loss = loss.mean(1).sum() * logits.shape[1] / normalizer
         return {"loss_focal": loss}
 
-    def _angle_loss_terms(self, pred_boxes, target_boxes):
-        """Return adjusted error, baseline error, and anisotropy blend.
-
-        A perfect square is equivalent after a quarter turn.  The optional
-        extension minimizes over that equivalence class and smoothly restores
-        the ordinary half-turn-periodic error as target anisotropy increases.
-        This is intentionally configurable: it is a mathematical correction
-        we add on top of the paper/released O^2 training recipe.
-        """
-
-        ordinary = angle_distance(pred_boxes[:, 4], target_boxes[:, 4])
-        if self.angle_loss_mode == "periodic_pi":
-            return ordinary, ordinary, torch.ones_like(ordinary)
-        quarter_turn = angle_distance(
-            pred_boxes[:, 4], target_boxes[:, 4] + 0.5)
-        equivalent = torch.minimum(ordinary, quarter_turn)
-        width, height = target_boxes[:, 2], target_boxes[:, 3]
-        anisotropy = (width - height).abs() / (width + height).clamp_min(1e-7)
-        if self.square_anisotropy_threshold == 0:
-            blend = (anisotropy > torch.finfo(anisotropy.dtype).eps).to(anisotropy.dtype)
-        else:
-            blend = (anisotropy / self.square_anisotropy_threshold).clamp(0, 1)
-        adjusted = equivalent + blend * (ordinary - equivalent)
-        return adjusted, ordinary, blend
-
     def _box_losses(self, outputs, targets, indices, normalizer):
         matched, target_boxes, _ = self._matched_tensors(outputs, targets, indices)
         pred_boxes = outputs["pred_boxes"][matched]
         if not len(target_boxes):
             zero = outputs["pred_boxes"].sum() * 0
             return {"loss_bbox": zero, "loss_angle": zero, "loss_kld": zero}
-        angle_loss, _, _ = self._angle_loss_terms(pred_boxes, target_boxes)
+        # The released O² head applies ordinary L1 to all five normalized box
+        # parameters.  Keep that exact source semantics here; its disagreement
+        # with periodic OBB geometry is exposed by diagnostics, not hidden by a
+        # local loss variant inside the reproduction baseline.
+        angle_loss = (pred_boxes[:, 4] - target_boxes[:, 4]).abs()
         return {
             "loss_bbox": F.l1_loss(pred_boxes[:, :4], target_boxes[:, :4], reduction="sum") / normalizer,
             "loss_angle": angle_loss.sum() / normalizer,
@@ -194,8 +190,9 @@ class RotatedRTv4Criterion(nn.Module):
         loss = F.cross_entropy(pred_distribution, left, reduction="none") * weight_left.reshape(-1)
         loss += F.cross_entropy(pred_distribution, right, reduction="none") * weight_right.reshape(-1)
         with torch.no_grad():
-            quality = rotated_iou(outputs["pred_boxes"][matched].detach(), target_boxes,
-                                  aligned=True).clamp(0, 1)
+            quality = self._aligned_xywh_quality(
+                outputs["pred_boxes"][matched].detach(), target_boxes,
+            ).clamp(0, 1)
             quality = quality[:, None].expand(-1, components).reshape(-1)
         return {"loss_fgl": (loss * quality).sum() / normalizer}
 
@@ -366,11 +363,12 @@ class RotatedRTv4Criterion(nn.Module):
                     "tau": self.kld_tau,
                 },
                 "angle_loss": {
-                    "mode": self.angle_loss_mode,
-                    "square_anisotropy_threshold": self.square_anisotropy_threshold,
-                    "source_alignment": "local symmetry-aware extension"
-                        if self.angle_loss_mode == "square_aware_soft"
-                        else "paper/released periodic-pi baseline",
+                    "mode": "raw_normalized_l1",
+                    "source_alignment": "shared five-parameter OBB L1",
+                },
+                "localization_quality": {
+                    "mode": "aligned_xywh_iou",
+                    "source_alignment": "D-FINE FGL and released O2 hbox_iou",
                 },
                 "refinement_kind": outputs.get("refinement_kind"),
                 "adr_geometry_contract": outputs.get("adr_geometry_contract"),
@@ -469,8 +467,8 @@ class RotatedRTv4Criterion(nn.Module):
         top_scores, top_labels = probabilities.max(dim=1)
         center_error = torch.linalg.vector_norm(pred_boxes[:, :2] - target_boxes[:, :2], dim=1)
         scale = torch.linalg.vector_norm(target_boxes[:, 2:4], dim=1).clamp_min(1e-7)
-        adjusted_angle, ordinary_angle, anisotropy_blend = self._angle_loss_terms(
-            pred_boxes, target_boxes)
+        geometry_angle = angle_distance(pred_boxes[:, 4], target_boxes[:, 4])
+        loss_angle = (pred_boxes[:, 4] - target_boxes[:, 4]).abs()
         target_anisotropy = (
             (target_boxes[:, 2] - target_boxes[:, 3]).abs() /
             (target_boxes[:, 2] + target_boxes[:, 3]).clamp_min(1e-7)
@@ -478,10 +476,9 @@ class RotatedRTv4Criterion(nn.Module):
         values = {
             "matched_count": len(target_boxes),
             "center_error_normalized": center_error / scale,
-            "angle_error_deg": ordinary_angle * 180.0,
-            "angle_loss_error_deg": adjusted_angle * 180.0,
+            "angle_error_deg": geometry_angle * 180.0,
+            "angle_loss_error_deg": loss_angle * 180.0,
             "target_anisotropy": target_anisotropy,
-            "square_anisotropy_blend": anisotropy_blend,
             "rotated_iou": rotated_iou(pred_boxes, target_boxes, aligned=True).clamp(0, 1),
             "target_class_score": target_scores,
             "top_score": top_scores,
@@ -563,13 +560,15 @@ class RotatedRTv4Criterion(nn.Module):
                 "max": float(finite.max()),
             }
         summary["square_symmetry"] = {
-            "mode": self.angle_loss_mode,
+            "loss_mode": "raw_normalized_l1",
             "anisotropy_definition": "abs(width-height)/(width+height)",
-            "transition_threshold": self.square_anisotropy_threshold,
             "exact_square_count": int((target_anisotropy <= 1e-7).sum()),
-            "transition_region_count": int(
-                ((anisotropy_blend > 0) & (anisotropy_blend < 1)).sum()),
-            "symmetry_adjusted_count": int((adjusted_angle < ordinary_angle).sum()),
+            "angle_seam_disagreement_count": int(
+                (loss_angle - geometry_angle > 1e-6).sum()),
+            "known_limitation": (
+                "five-parameter L1 is not invariant to the angle seam or the "
+                "quarter-turn equivalence of exact squares"
+            ),
         }
         if adr_chart is not None:
             summary["adr_chart_seam"] = adr_chart

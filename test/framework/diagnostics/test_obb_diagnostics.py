@@ -64,6 +64,7 @@ class OBBDiagnosticsTest(unittest.TestCase):
                 diagnostics_train_interval=1,
                 diagnostics_detailed_image_limit=1,
                 diagnostics_detailed_epoch_interval=10,
+                diagnostics_layerwise_epoch_interval=10,
                 diagnostics_query_topk=1,
                 epoches=20,
                 yaml_cfg={"model": "synthetic"},
@@ -75,8 +76,10 @@ class OBBDiagnosticsTest(unittest.TestCase):
             dataset = _Dataset()
             diagnostics.start_evaluation(0, dataset)
             self.assertTrue(diagnostics.needs_detailed_eval_layers())
+            self.assertTrue(diagnostics.needs_layerwise_eval())
             diagnostics.start_evaluation(1, dataset)
             self.assertFalse(diagnostics.needs_detailed_eval_layers())
+            self.assertFalse(diagnostics.needs_layerwise_eval())
             diagnostics.start_evaluation(9, dataset)
             self.assertTrue(diagnostics.needs_detailed_eval_layers())
             diagnostics.start_evaluation(19, dataset)
@@ -187,7 +190,7 @@ class OBBDiagnosticsTest(unittest.TestCase):
         model.eval().set_diagnostic_mode(True)
         with torch.no_grad():
             outputs = model(features)
-        references = outputs["diagnostic_layer_refs"]
+        references = outputs["diagnostic_layer_anchors"]
         distributions = outputs["diagnostic_layer_distributions"]
         project = outputs["diagnostic_distribution_project"]
         residuals = distribution_integral(
@@ -199,9 +202,17 @@ class OBBDiagnosticsTest(unittest.TestCase):
         expected = outputs["diagnostic_layer_boxes"]
         iou = rotated_iou(
             reconstructed.reshape(-1, 5), expected.reshape(-1, 5),
-            aligned=True, normalized_angle=True,
+            aligned=True, model_space=True,
         )
         torch.testing.assert_close(iou, torch.ones_like(iou))
+        input_references = outputs["diagnostic_layer_input_refs"]
+        torch.testing.assert_close(
+            input_references[1:], expected[:-1], atol=0, rtol=0)
+        torch.testing.assert_close(
+            references,
+            outputs["diagnostic_pre_boxes"].unsqueeze(0).expand_as(references),
+            atol=0, rtol=0,
+        )
 
         target = _target()
         processor = RotatedPostProcessor(
@@ -242,22 +253,33 @@ class OBBDiagnosticsTest(unittest.TestCase):
                 records = [json.loads(line) for line in handle]
             self.assertTrue(records)
             for record in records:
-                for layer in record["layers"]:
-                    self.assertIn("reference_box", layer)
+                self.assertEqual(record["stage_sequence"][0], "Pre-box")
+                for stage in record["stages"]:
+                    self.assertIn("input_reference_box", stage)
             matched_record = next(
                 record for record in records
                 if record["matched_gt_index"] is not None
             )
-            for layer in matched_record["layers"]:
-                self.assertIn("reference_box", layer)
-                self.assertIn("reference_geometry", layer)
+            decoder_stages = [
+                stage for stage in matched_record["stages"]
+                if stage["stage"] == "decoder_layer"
+            ]
+            for stage in decoder_stages:
+                self.assertIn("input_reference_box", stage)
+                self.assertIn("input_reference_geometry", stage)
+                self.assertIn("initial_anchor_box", stage)
+                self.assertIn("initial_anchor_geometry", stage)
+                self.assertIn("location_quality_estimator", stage)
+                self.assertIn("adr_geometry", stage)
                 self.assertEqual(
-                    set(layer["fine_grained_distributions"]),
+                    set(stage["fine_grained_distributions"]),
                     {
                         "external_left", "external_top", "external_right",
                         "external_bottom", "vertex_epsilon", "vertex_eta",
                     },
                 )
+                for component in stage["fine_grained_distributions"].values():
+                    self.assertIn("weighted_values", component)
             diagnostics.close()
 
     def test_complete_evaluation_record_is_self_contained(self):

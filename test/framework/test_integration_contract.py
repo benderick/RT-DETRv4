@@ -76,6 +76,8 @@ class FrameworkContractTest(unittest.TestCase):
             self.assertNotIn("chamfer_squared", matcher)
             self.assertEqual(yaml["diagnostics_detailed_epoch_interval"], 10)
             self.assertEqual(resolved.diagnostics_detailed_epoch_interval, 10)
+            self.assertEqual(yaml["diagnostics_layerwise_epoch_interval"], 10)
+            self.assertEqual(resolved.diagnostics_layerwise_epoch_interval, 10)
 
     def test_integration_contract_and_canonical_packages_exist(self):
         self.assertTrue((ROOT / "docs/framework/INTEGRATION_CONTRACT.md").is_file())

@@ -12,8 +12,8 @@ questions:
 All decoder stages use the same standard D-FINE flattened top-k selection.
 The primary stage table disables overlap suppression while retaining the
 configured score threshold and maximum-detection budget.  The final stage is
-also evaluated with the historical rotated-NMS path on the exact same logits
-and boxes, so their difference isolates NMS itself.
+also evaluated with a rotated-NMS control on the exact same logits and boxes,
+so their difference isolates overlap suppression itself.
 """
 
 from __future__ import annotations
@@ -40,10 +40,17 @@ if str(REPO_ROOT) not in sys.path:
 
 from engine.core import YAMLConfig  # noqa: E402
 from engine.evaluation.obb import DotaOBBEvaluator  # noqa: E402
+from engine.rtv4.obb.methods.o2.adr import (  # noqa: E402
+    ADR_COMPONENT_NAMES,
+    adr_to_rbox,
+)
 from engine.rtv4.rotated_box_ops import rbox_to_corners, rotated_iou  # noqa: E402
 
 
 SCHEMA_VERSION = "o2-acceptance-v1"
+MODEL_PIXEL_IOU_TOLERANCE = 1e-3
+DECODER_CONTRACT_TOLERANCE = 1e-6
+O2_DFINE_M_PARAMETER_RANGE = (19_000_000, 20_000_000)
 SOURCE_FILES = (
     "engine/rtv4/rotated_dfine_decoder.py",
     "engine/rtv4/obb/methods/o2/adr.py",
@@ -89,7 +96,10 @@ def _checkpoint_state(path: Path):
         key.removeprefix("module."): value
         for key, value in state.items()
     }
-    return state, source, checkpoint.get("epoch") if isinstance(checkpoint, dict) else None
+    epoch = None
+    if isinstance(checkpoint, dict):
+        epoch = checkpoint.get("epoch", checkpoint.get("last_epoch"))
+    return state, source, epoch
 
 
 def _git_value(*args):
@@ -180,6 +190,197 @@ def _candidate_count(outputs, postprocessor):
     return (top_scores >= postprocessor.score_threshold).sum(dim=1).tolist()
 
 
+def _source_aligned_config_contract(yaml):
+    """Validate the single supported O²-DFINE-M training contract."""
+
+    decoder = yaml["RotatedDFINETransformer"]
+    encoder = yaml["HybridEncoder"]
+    criterion = yaml["RotatedRTv4Criterion"]
+    matcher = criterion["matcher"]
+    optimizer = yaml["optimizer"]
+    postprocessor = yaml["RotatedPostProcessor"]
+    train_loader = yaml["train_dataloader"]
+    transform_types = tuple(
+        operation["type"]
+        for operation in train_loader["dataset"]["transforms"]["ops"]
+    )
+    actual = {
+        "backbone": yaml["HGNetv2"]["name"],
+        "encoder_expansion": encoder["expansion"],
+        "encoder_depth_mult": encoder["depth_mult"],
+        "num_queries": decoder["num_queries"],
+        "num_decoder_layers": decoder["num_layers"],
+        "auxiliary_training": decoder.get("aux_loss", True),
+        "refinement_mode": decoder["refinement_mode"],
+        "reg_max": decoder["reg_max"],
+        "adr_a": decoder["adr_a"],
+        "adr_c": decoder["adr_c"],
+        "ocd_mode": decoder["ocd_mode"],
+        "ocd_crowded_policy": decoder["ocd_crowded_policy"],
+        "num_denoising": decoder["num_denoising"],
+        "criterion_losses": tuple(criterion["losses"]),
+        "criterion_alpha": criterion["alpha"],
+        "criterion_kld": (
+            criterion["kld_sqrt"], criterion["kld_fun"], criterion["kld_tau"]),
+        "criterion_weights": dict(criterion["weight_dict"]),
+        "union_matching": criterion["use_uni_set"],
+        "matcher_weights": dict(matcher["weight_dict"]),
+        "matcher_kld": (
+            matcher["kld_sqrt"], matcher["kld_fun"], matcher["kld_tau"]),
+        "epochs": yaml["epoches"],
+        "total_batch_size": train_loader["total_batch_size"],
+        "base_lr": optimizer["lr"],
+        "backbone_lr": optimizer["params"][0]["lr"],
+        "weight_decay": optimizer["weight_decay"],
+        "gradient_clip": yaml["clip_max_norm"],
+        "lr_milestones": tuple(yaml["lr_scheduler"]["milestones"]),
+        "warmup_duration": yaml["lr_warmup_scheduler"]["warmup_duration"],
+        "top_queries": yaml["num_top_queries"],
+        "max_detections": postprocessor["max_detections"],
+        "full_image_apply_nms": postprocessor["apply_nms"],
+        "mixup_probability": train_loader["collate_fn"]["mixup_prob"],
+        "train_transform_types": transform_types,
+    }
+    expected = {
+        "backbone": "B2",
+        "encoder_expansion": 1.0,
+        "encoder_depth_mult": .67,
+        "num_queries": 300,
+        "num_decoder_layers": 4,
+        "auxiliary_training": True,
+        "refinement_mode": "o2_adr",
+        "reg_max": 32,
+        "adr_a": .5,
+        "adr_c": .25,
+        "ocd_mode": "box",
+        "ocd_crowded_policy": "released_dynamic",
+        "num_denoising": 100,
+        "criterion_losses": ("vfl", "boxes", "local"),
+        "criterion_alpha": .75,
+        "criterion_kld": (False, "log1p", 1.0),
+        "criterion_weights": {
+            "loss_vfl": 1.0,
+            "loss_bbox": 5.0,
+            "loss_angle": 5.0,
+            "loss_kld": 2.0,
+            "loss_fgl": .15,
+        },
+        "union_matching": True,
+        "matcher_weights": {
+            "cost_class": 2.0,
+            "cost_bbox": 0.0,
+            "cost_angle": 0.0,
+            "cost_kld": 2.0,
+            "cost_chamfer": 5.0,
+        },
+        "matcher_kld": (False, "log1p", 1.0),
+        "epochs": 72,
+        "total_batch_size": 8,
+        "base_lr": 5e-5,
+        "backbone_lr": 5e-6,
+        "weight_decay": 1e-4,
+        "gradient_clip": .1,
+        "lr_milestones": (500,),
+        "warmup_duration": 500,
+        "top_queries": 300,
+        "max_detections": 300,
+        "full_image_apply_nms": False,
+        "mixup_probability": 0.0,
+        "train_transform_types": (
+            "RotatedResize",
+            "RotatedRandomFlip",
+            "RotatedRandomRotate",
+            "RotatedSanitizeBoxes",
+            "RotatedPad",
+            "RotatedConvertToTensor",
+        ),
+    }
+    differences = {
+        name: {"expected": expected[name], "observed": value}
+        for name, value in actual.items()
+        if value != expected[name]
+    }
+    return {
+        "status": "PASS" if not differences else "FAIL",
+        "actual": actual,
+        "differences": differences,
+    }
+
+
+def _decoder_contract_differences(outputs):
+    """Measure the runtime contracts that distinguish O² refinement.
+
+    These checks use tensors from the actual validation forward pass.  They
+    complement unit tests by preventing a future wiring change from silently
+    turning six-value, fixed-anchor, layer-to-layer refinement into a
+    different decoder while leaving the configuration name unchanged.
+    """
+
+    required = (
+        "diagnostic_pre_boxes",
+        "diagnostic_layer_boxes",
+        "diagnostic_layer_anchors",
+        "diagnostic_layer_input_refs",
+        "diagnostic_layer_distributions",
+        "diagnostic_layer_adr_residuals",
+        "diagnostic_layer_logits",
+        "diagnostic_layer_class_logits_before_lqe",
+        "diagnostic_layer_lqe_logit_delta",
+    )
+    missing = [name for name in required if name not in outputs]
+    if missing:
+        raise RuntimeError(
+            "O² runtime contract is missing diagnostic tensors: "
+            + ", ".join(missing))
+    if outputs.get("diagnostic_refinement_kind") != "adr":
+        raise RuntimeError("O² runtime contract requires ADR refinement")
+    if tuple(outputs.get("diagnostic_distribution_names", ())) != \
+            tuple(ADR_COMPONENT_NAMES):
+        raise RuntimeError(
+            "O² runtime contract requires exactly four boundary and two "
+            "vertex distributions")
+
+    boxes = outputs["diagnostic_layer_boxes"]
+    anchors = outputs["diagnostic_layer_anchors"]
+    input_refs = outputs["diagnostic_layer_input_refs"]
+    residuals = outputs["diagnostic_layer_adr_residuals"]
+    distributions = outputs["diagnostic_layer_distributions"]
+    if residuals.shape != (*boxes.shape[:-1], 6):
+        raise RuntimeError(
+            "O² ADR residual shape does not implement six-value refinement: "
+            f"boxes={tuple(boxes.shape)}, residuals={tuple(residuals.shape)}")
+    if distributions.shape[:-1] != boxes.shape[:-1] or \
+            distributions.shape[-1] % 6:
+        raise RuntimeError(
+            "O² distribution head is not partitionable into six variables: "
+            f"{tuple(distributions.shape)}")
+
+    fixed_anchor = outputs["diagnostic_pre_boxes"].unsqueeze(0).expand_as(anchors)
+    fixed_anchor_difference = (anchors - fixed_anchor).abs().max().item()
+    reference_chain_difference = (
+        (input_refs[1:] - boxes[:-1]).abs().max().item()
+        if len(boxes) > 1 else 0.0)
+
+    reconstructed = adr_to_rbox(anchors, residuals, normalized_angle=True)
+    reconstructed_corners = rbox_to_corners(
+        reconstructed, normalized_angle=True)
+    observed_corners = rbox_to_corners(boxes, normalized_angle=True)
+    reconstruction_corner_difference = (
+        reconstructed_corners - observed_corners).abs().max().item()
+
+    scores = outputs["diagnostic_layer_logits"]
+    raw_scores = outputs["diagnostic_layer_class_logits_before_lqe"]
+    lqe_delta = outputs["diagnostic_layer_lqe_logit_delta"]
+    lqe_identity_difference = (
+        scores - raw_scores - lqe_delta).abs().max().item()
+    return {
+        "max_fixed_anchor_difference": fixed_anchor_difference,
+        "max_reference_chain_difference": reference_chain_difference,
+        "max_adr_reconstruction_corner_difference": reconstruction_corner_difference,
+        "max_lqe_identity_difference": lqe_identity_difference,
+    }
+
+
 def _matched_refinement_evidence(
     stage_map,
     outputs,
@@ -195,6 +396,7 @@ def _matched_refinement_evidence(
     oracle_boxes = final["pred_boxes"].clone()
     batch_ious = []
     selections = torch.zeros(len(stage_names), dtype=torch.int64)
+    max_model_pixel_riou_difference = 0.0
 
     distributions = outputs.get("diagnostic_layer_distributions")
     for batch_index, ((query_indices, target_indices), target) in enumerate(
@@ -206,10 +408,29 @@ def _matched_refinement_evidence(
         selected = stage_boxes[:, batch_index, query_indices]
         target_boxes = target["boxes"].index_select(0, target_indices)
         expanded_targets = target_boxes.unsqueeze(0).expand(len(stage_names), -1, -1)
+        restored = postprocessor.restore_boxes(
+            selected, [target] * len(stage_names))
+        restored_targets = postprocessor.restore_boxes(
+            target_boxes.unsqueeze(0), [target])[0]
+        expanded_restored_targets = restored_targets.unsqueeze(0).expand(
+            len(stage_names), -1, -1)
         ious = rotated_iou(
-            selected.reshape(-1, 5), expanded_targets.reshape(-1, 5),
-            aligned=True, normalized_angle=True,
+            restored.reshape(-1, 5),
+            expanded_restored_targets.reshape(-1, 5),
+            aligned=True, model_space=False,
         ).reshape(len(stage_names), -1)
+        model_ious = rotated_iou(
+            selected.reshape(-1, 5), expanded_targets.reshape(-1, 5),
+            aligned=True, model_space=True,
+        ).reshape(len(stage_names), -1)
+        difference = (model_ious - ious).abs().max().item()
+        max_model_pixel_riou_difference = max(
+            max_model_pixel_riou_difference, difference)
+        if difference > MODEL_PIXEL_IOU_TOLERANCE:
+            raise RuntimeError(
+                "Model-space and original-pixel rIoU disagree: "
+                f"max_abs_difference={difference:.6g}, "
+                f"tolerance={MODEL_PIXEL_IOU_TOLERANCE:.6g}")
         batch_ious.append(ious.transpose(0, 1).detach().cpu())
         best_stage = ious.argmax(dim=0)
         selections += torch.bincount(
@@ -235,10 +456,6 @@ def _matched_refinement_evidence(
                 continue
             query_index = int(query_indices[local_index])
             gt_index = int(target_indices[local_index])
-            restored = postprocessor.restore_boxes(
-                selected[:, local_index].unsqueeze(1),
-                [target] * len(stage_names),
-            ).squeeze(1)
             record = {
                 "adr_delta": value,
                 "image_id": int(target["image_id"].reshape(-1)[0]),
@@ -247,7 +464,7 @@ def _matched_refinement_evidence(
                 "gt_label": int(target["labels"][gt_index]),
                 "stage_names": stage_names,
                 "stage_ious": ious[:, local_index].detach().cpu(),
-                "stage_boxes": restored.detach().cpu(),
+                "stage_boxes": restored[:, local_index].detach().cpu(),
             }
             if distributions is not None:
                 record["distribution_logits"] = distributions[
@@ -266,7 +483,7 @@ def _matched_refinement_evidence(
     return {
         "pred_logits": final["pred_logits"],
         "pred_boxes": oracle_boxes,
-    }, batch_ious, selections
+    }, batch_ious, selections, max_model_pixel_riou_difference
 
 
 def _render_case(case, dataset, output: Path):
@@ -363,6 +580,13 @@ def run(args):
     output.mkdir(parents=True, exist_ok=True)
 
     config = YAMLConfig(str(config_path))
+    training_contract = _source_aligned_config_contract(config.yaml_cfg)
+    if training_contract["differences"]:
+        raise RuntimeError(
+            "Configuration is not the supported O²-DFINE-M training contract: "
+            + json.dumps(
+                training_contract["differences"], ensure_ascii=False,
+                sort_keys=True, default=str))
     frozen_config = config.yaml_cfg
     config_hash = _json_hash(frozen_config)
     decoder_config = frozen_config.get("RotatedDFINETransformer", {})
@@ -383,23 +607,31 @@ def run(args):
 
     device = torch.device(args.device)
     model = config.model.to(device).eval()
+    parameter_count = sum(parameter.numel() for parameter in model.parameters())
+    trainable_parameter_count = sum(
+        parameter.numel() for parameter in model.parameters()
+        if parameter.requires_grad)
+    minimum_parameters, maximum_parameters = O2_DFINE_M_PARAMETER_RANGE
+    if not minimum_parameters <= parameter_count < maximum_parameters:
+        raise RuntimeError(
+            "Configured model does not have O²-DFINE-M capacity: "
+            f"parameters={parameter_count}, expected in "
+            f"[{minimum_parameters}, {maximum_parameters})")
     decoder = getattr(model, "decoder", None)
     if decoder is None or not hasattr(decoder, "set_diagnostic_mode"):
         raise TypeError("Configured model does not expose OBB decoder diagnostics")
-    decoder.set_diagnostic_mode(True)
+    if not bool(getattr(decoder, "aux_loss", False)):
+        raise RuntimeError(
+            "O²-DFINE requires auxiliary training: the detached traditional "
+            "OBB pre-box must receive its own pre_outputs supervision")
+    # Full-dataset acceptance needs layer outputs, not the much larger
+    # deformable-attention traces used only for selected paper examples.
+    decoder.set_diagnostic_mode(True, capture_attention=False)
     state, checkpoint_source, checkpoint_epoch = _checkpoint_state(checkpoint_path)
     # Strict loading is itself part of acceptance: no missing/unexpected keys
     # are tolerated or hidden behind compatibility fallbacks.
     model.load_state_dict(state, strict=True)
     del state
-    geometry_signature = tuple(
-        int(value) for value in decoder.adr_geometry_signature.tolist()
-    ) if hasattr(decoder, "adr_geometry_signature") else None
-    if geometry_signature != (4, 2, 1):
-        raise RuntimeError(
-            "O² acceptance requires ADR geometry signature (4, 2, 1); "
-            f"observed {geometry_signature!r}")
-
     data_loader = config.val_dataloader
     dataset = data_loader.dataset
     postprocessor = config.postprocessor.to(device).eval()
@@ -414,6 +646,13 @@ def run(args):
     adr_raw_orthogonality = []
     oracle_selections = None
     best_cases = {}
+    max_model_pixel_riou_difference = 0.0
+    decoder_contract = {
+        "max_fixed_anchor_difference": 0.0,
+        "max_reference_chain_difference": 0.0,
+        "max_adr_reconstruction_corner_difference": 0.0,
+        "max_lqe_identity_difference": 0.0,
+    }
     candidate_total = nms_kept_total = no_nms_kept_total = 0
     started = time.perf_counter()
 
@@ -433,6 +672,11 @@ def run(args):
                 for target in targets_cpu
             ]
             outputs = model(samples)
+            batch_contract = _decoder_contract_differences(outputs)
+            decoder_contract = {
+                name: max(decoder_contract[name], value)
+                for name, value in batch_contract.items()
+            }
             raw_orthogonality = outputs.get(
                 "diagnostic_layer_adr_raw_orthogonality_error")
             if raw_orthogonality is not None:
@@ -462,8 +706,11 @@ def run(args):
             nms_kept_total += sum(len(item["scores"]) for item in final_nms)
             no_nms_kept_total += sum(len(item["scores"]) for item in final_no_nms)
 
-            oracle, batch_evidence, selections = _matched_refinement_evidence(
+            oracle, batch_evidence, selections, batch_geometry_difference = \
+                _matched_refinement_evidence(
                 stage_map, outputs, targets, matcher, postprocessor, best_cases)
+            max_model_pixel_riou_difference = max(
+                max_model_pixel_riou_difference, batch_geometry_difference)
             matched_ious.extend(batch_evidence)
             oracle_selections += selections
             oracle_predictions = postprocessor(oracle, targets, apply_nms=False)
@@ -489,7 +736,7 @@ def run(args):
         print(f"\n=== NMS-free full-dataset evaluation: {name} ===")
         stage_metrics[name] = _accumulate(evaluator, shared_ground_truth)
         evaluator.summarize()
-    print("\n=== Historical rotated-NMS evaluation: final layer ===")
+    print("\n=== Rotated-NMS control: final layer ===")
     final_nms_metrics = _accumulate(final_nms_evaluator, shared_ground_truth)
     final_nms_evaluator.summarize()
     print("\n=== Matched-query oracle layer selection (diagnostic only) ===")
@@ -556,10 +803,25 @@ def run(args):
     final_no_nms_value = stage_metrics[final_layer_name][primary]
     final_nms_value = final_nms_metrics[primary]
     gates = {
+        "source_aligned_training_config": training_contract["status"] == "PASS",
+        "prebox_auxiliary_supervision_configured": bool(decoder.aux_loss),
         "strict_checkpoint_load": True,
-        "adr_geometry_signature": geometry_signature == (4, 2, 1),
         "full_image_evaluator": evaluator_type == "DotaOBBEvaluator",
         "all_images_evaluated": len(final_nms_evaluator.predictions) == len(dataset),
+        "model_pixel_riou_consistent": (
+            max_model_pixel_riou_difference <= MODEL_PIXEL_IOU_TOLERANCE),
+        "fixed_initial_adr_anchor": (
+            decoder_contract["max_fixed_anchor_difference"]
+            <= DECODER_CONTRACT_TOLERANCE),
+        "layer_output_drives_next_query": (
+            decoder_contract["max_reference_chain_difference"]
+            <= DECODER_CONTRACT_TOLERANCE),
+        "six_value_adr_decodes_reported_box": (
+            decoder_contract["max_adr_reconstruction_corner_difference"]
+            <= DECODER_CONTRACT_TOLERANCE),
+        "lqe_is_applied_to_layer_logits": (
+            decoder_contract["max_lqe_identity_difference"]
+            <= DECODER_CONTRACT_TOLERANCE),
         "final_ap_not_below_layer0": (
             final_no_nms_value >= stage_metrics[first_layer_name][primary]),
         "final_ap_not_below_prebox": (
@@ -567,13 +829,19 @@ def run(args):
         # This is deliberately reported rather than folded into overall pass:
         # whether a paper-derived baseline must be NMS-free is a reproduction
         # decision, while stage refinement is a direct mechanism requirement.
-        "nms_free_not_below_historical_nms": final_no_nms_value >= final_nms_value,
+        "nms_free_not_below_nms_control": final_no_nms_value >= final_nms_value,
     }
     required_gates = (
+        "source_aligned_training_config",
+        "prebox_auxiliary_supervision_configured",
         "strict_checkpoint_load",
-        "adr_geometry_signature",
         "full_image_evaluator",
         "all_images_evaluated",
+        "model_pixel_riou_consistent",
+        "fixed_initial_adr_anchor",
+        "layer_output_drives_next_query",
+        "six_value_adr_decodes_reported_box",
+        "lqe_is_applied_to_layer_logits",
         "final_ap_not_below_layer0",
         "final_ap_not_below_prebox",
     )
@@ -588,8 +856,27 @@ def run(args):
         "checkpoint_sha256": _sha256(checkpoint_path),
         "checkpoint_state_source": checkpoint_source,
         "checkpoint_epoch": checkpoint_epoch,
-        "adr_geometry_signature": geometry_signature,
         "adr_geometry_contract": "dfine4_plus_vertex2_equal_diagonal",
+        "training_contract": training_contract,
+        "model_capacity": {
+            "parameters": parameter_count,
+            "trainable_parameters": trainable_parameter_count,
+            "expected_parameter_range": list(O2_DFINE_M_PARAMETER_RANGE),
+        },
+        "geometry_crosscheck": {
+            "reported_coordinate_system": "original_image_pixels_and_radians",
+            "max_model_pixel_riou_difference": max_model_pixel_riou_difference,
+            "tolerance": MODEL_PIXEL_IOU_TOLERANCE,
+        },
+        "decoder_contract": {
+            "definition": (
+                "fixed initial ADR anchor; cumulative layer boxes feed the "
+                "next query; four boundary plus two vertex distributions "
+                "decode every reported OBB; LQE updates layer logits"
+            ),
+            **decoder_contract,
+            "tolerance": DECODER_CONTRACT_TOLERANCE,
+        },
         "dataset": {
             "root": str(dataset.root),
             "images": len(dataset),
@@ -601,7 +888,7 @@ def run(args):
             "num_top_queries": postprocessor.num_top_queries,
             "score_threshold": postprocessor.score_threshold,
             "max_detections": postprocessor.max_detections,
-            "historical_nms_iou_threshold": postprocessor.nms_iou_threshold,
+            "nms_control_iou_threshold": postprocessor.nms_iou_threshold,
             "candidate_count": candidate_total,
             "kept_without_nms": no_nms_kept_total,
             "kept_with_nms": nms_kept_total,
@@ -609,7 +896,7 @@ def run(args):
                 no_nms_kept_total - nms_kept_total),
         },
         "stage_metrics_without_nms": stage_metrics,
-        "final_metrics_with_historical_nms": final_nms_metrics,
+        "final_metrics_with_nms_control": final_nms_metrics,
         "oracle_metrics_without_nms": oracle_metrics,
         "refinement": refinement,
         "gates": gates,

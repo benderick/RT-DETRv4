@@ -144,9 +144,31 @@ class UAVRODConfigTest(unittest.TestCase):
                 yaml["RotatedDFINETransformer"]["refinement_mode"], mode)
             self.assertEqual(
                 yaml["RotatedDFINETransformer"]["num_queries"], 300)
+            self.assertEqual(yaml["RotatedDFINETransformer"]["num_layers"], 4)
+            self.assertEqual(yaml["epoches"], 72)
+            self.assertEqual(yaml["train_dataloader"]["total_batch_size"], 8)
+            self.assertEqual(yaml["val_dataloader"]["total_batch_size"], 8)
+            self.assertFalse(yaml["RotatedPostProcessor"]["apply_nms"])
             self.assertEqual(yaml["evaluator"]["type"], "DotaOBBEvaluator")
             self.assertEqual(
                 yaml["train_dataloader"]["collate_fn"]["mixup_prob"], 0.0)
+            transform_types = tuple(
+                operation["type"]
+                for operation in yaml["train_dataloader"]["dataset"]
+                ["transforms"]["ops"]
+            )
+            self.assertEqual(transform_types, (
+                "RotatedResize",
+                "RotatedRandomFlip",
+                "RotatedRandomRotate",
+                "RotatedSanitizeBoxes",
+                "RotatedPad",
+                "RotatedConvertToTensor",
+            ))
+            self.assertNotIn("RotatedPhotometricDistort", transform_types)
+            self.assertFalse(any(
+                "mosaic" in name.lower() or "mixup" in name.lower()
+                for name in transform_types))
 
 
 @unittest.skipUnless(

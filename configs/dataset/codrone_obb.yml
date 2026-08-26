@@ -11,16 +11,16 @@ train_dataloader:
   type: DataLoader
   dataset:
     type: CODroneDetection
-    root: /home/liuxiaolong/futurama/data/CODrone/train
+    root: ../data/CODrone/train
     filter_empty_gt: False
     transforms:
       type: Compose
       ops:
-        - {type: RotatedPhotometricDistort, p: 0.8}
-        - {type: RotatedResizePad, size: [1024, 1024], fill: 114}
+        - {type: RotatedResize, size: [1024, 1024]}
         - {type: RotatedRandomFlip, p: 0.75, directions: [horizontal, vertical, diagonal]}
         - {type: RotatedRandomRotate, p: 0.5, angle_range: 180, fill: 114}
         - {type: RotatedSanitizeBoxes, min_size: 1, min_visible: 0.2}
+        - {type: RotatedPad, size: [1024, 1024], fill: 114}
         - {type: RotatedConvertToTensor, normalize_boxes: True}
   shuffle: True
   total_batch_size: 16
@@ -37,11 +37,12 @@ val_dataloader:
   type: DataLoader
   dataset:
     type: CODroneDetection
-    root: /home/liuxiaolong/futurama/data/CODrone/val
+    root: ../data/CODrone/val
     transforms:
       type: Compose
       ops:
-        - {type: RotatedResizePad, size: [1024, 1024], fill: 114}
+        - {type: RotatedResize, size: [1024, 1024]}
+        - {type: RotatedPad, size: [1024, 1024], fill: 114}
         - {type: RotatedSanitizeBoxes, min_size: 1, min_visible: 0.0}
         - {type: RotatedConvertToTensor, normalize_boxes: True}
   shuffle: False

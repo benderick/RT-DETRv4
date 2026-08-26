@@ -9,6 +9,7 @@ Copyright (c) 2024 The DEIM Authors. All Rights Reserved.
 import sys
 import math
 import time
+from collections import OrderedDict
 from typing import Iterable
 
 import torch
@@ -19,6 +20,48 @@ from torch.cuda.amp.grad_scaler import GradScaler
 from ..optim import ModelEMA, Warmup
 from ..data import CocoEvaluator
 from ..misc import MetricLogger, SmoothedValue, dist_utils
+
+
+def _refinement_stage_outputs(outputs):
+    """Return the common pre-box -> decoder-stage prediction contract."""
+
+    required = (
+        "diagnostic_pre_logits", "diagnostic_pre_boxes",
+        "diagnostic_layer_logits", "diagnostic_layer_boxes",
+    )
+    if any(name not in outputs for name in required):
+        return OrderedDict()
+    layer_logits = outputs["diagnostic_layer_logits"]
+    layer_boxes = outputs["diagnostic_layer_boxes"]
+    if layer_logits.shape[:3] != layer_boxes.shape[:3]:
+        raise RuntimeError(
+            "Diagnostic layer logits and boxes have inconsistent shapes: "
+            f"{tuple(layer_logits.shape)} versus {tuple(layer_boxes.shape)}")
+    stages = OrderedDict([
+        ("pre_box", {
+            "pred_logits": outputs["diagnostic_pre_logits"],
+            "pred_boxes": outputs["diagnostic_pre_boxes"],
+        })
+    ])
+    for layer_index in range(len(layer_boxes)):
+        stages[f"decoder_{layer_index}"] = {
+            "pred_logits": layer_logits[layer_index],
+            "pred_boxes": layer_boxes[layer_index],
+        }
+    return stages
+
+
+def _evaluator_metrics(evaluator):
+    return {
+        "metrics": getattr(evaluator, "metrics", {}),
+        "per_class": getattr(evaluator, "per_class", {}),
+        "per_class_metrics": getattr(evaluator, "per_class_metrics", {}),
+        "stats": getattr(evaluator, "stats", []),
+        "prediction_count": int(sum(
+            len(prediction["scores"])
+            for prediction in getattr(evaluator, "predictions", {}).values()
+        )),
+    }
 
 
 def _synchronize_for_measurement(device, enabled):
@@ -88,31 +131,42 @@ def _box_geometry_observations(boxes):
     }
     if not len(finite):
         return result
+    width_height = finite[..., 2:4]
+    minor_side = width_height.amin(dim=-1)
+    major_side = width_height.amax(dim=-1)
+    angle = torch.remainder(finite[..., 4], 1.0)
     result.update({
         "center_x": _distribution(finite[..., 0]),
         "center_y": _distribution(finite[..., 1]),
         "width": _distribution(finite[..., 2]),
         "height": _distribution(finite[..., 3]),
-        "minor_side": _distribution(finite[..., 2:4].amin(dim=-1)),
-        "aspect_ratio": _distribution(
-            finite[..., 2:4].amax(dim=-1) /
-            finite[..., 2:4].amin(dim=-1).clamp_min(1e-12)
-        ),
-        "angle_normalized": _distribution(finite[..., 4]),
+        "minor_side": _distribution(minor_side),
+        "area_normalized": _distribution(width_height.prod(dim=-1)),
+        "aspect_ratio": _distribution(major_side / minor_side.clamp_min(1e-12)),
+        "anisotropy": _distribution(
+            (finite[..., 2] - finite[..., 3]).abs() /
+            width_height.sum(dim=-1).clamp_min(1e-12)),
+        "angle_normalized": _distribution(angle),
+        "angle_seam_distance": _distribution(torch.minimum(angle, 1.0 - angle)),
     })
     return result
 
 
 @torch.no_grad()
 def _gradient_statistics(model):
-    accumulators = {}
-    for name, parameter in model.named_parameters():
-        if parameter.grad is None:
-            continue
-        clean_name = name.removeprefix("module.")
-        group = next((candidate for candidate in ("backbone", "encoder", "decoder")
-                      if clean_name.startswith(candidate + ".")), "other")
-        grad = parameter.grad.detach().float()
+    broad_accumulators = {}
+    component_accumulators = {}
+
+    component_prefixes = (
+        ("encoder_box_head", "decoder.enc_bbox_head."),
+        ("pre_box_head", "decoder.pre_bbox_head."),
+        ("box_refinement_heads", "decoder.dec_bbox_head."),
+        ("angle_refinement_heads", "decoder.dec_angle_head."),
+        ("classification_heads", "decoder.dec_score_head."),
+        ("location_quality_heads", "decoder.decoder.lqe_layers."),
+    )
+
+    def accumulate(accumulators, group, grad):
         entry = accumulators.setdefault(group, {
             "square_sum": grad.new_zeros(()), "max_abs": grad.new_zeros(()),
             "element_count": 0, "nonfinite_count": 0, "parameter_tensors": 0,
@@ -122,18 +176,42 @@ def _gradient_statistics(model):
         entry["element_count"] += grad.numel()
         entry["nonfinite_count"] += int((~torch.isfinite(grad)).sum())
         entry["parameter_tensors"] += 1
-    result = {}
-    total_square = None
-    for group, entry in accumulators.items():
-        total_square = entry["square_sum"] if total_square is None else total_square + entry["square_sum"]
-        result[group] = {
-            "l2_norm": float(entry["square_sum"].sqrt()),
-            "max_abs": float(entry["max_abs"]),
-            "element_count": entry["element_count"],
-            "parameter_tensors": entry["parameter_tensors"],
-            "nonfinite_count": entry["nonfinite_count"],
+
+    def finalize(accumulators):
+        return {
+            group: {
+                "l2_norm": float(entry["square_sum"].sqrt()),
+                "max_abs": float(entry["max_abs"]),
+                "element_count": entry["element_count"],
+                "parameter_tensors": entry["parameter_tensors"],
+                "nonfinite_count": entry["nonfinite_count"],
+            }
+            for group, entry in accumulators.items()
         }
-    result["total_l2_norm"] = float(total_square.sqrt()) if total_square is not None else 0.0
+
+    for name, parameter in model.named_parameters():
+        if parameter.grad is None:
+            continue
+        clean_name = name.removeprefix("module.")
+        group = next((candidate for candidate in ("backbone", "encoder", "decoder")
+                      if clean_name.startswith(candidate + ".")), "other")
+        grad = parameter.grad.detach().float()
+        accumulate(broad_accumulators, group, grad)
+        component = next((component for component, prefix in component_prefixes
+                          if clean_name.startswith(prefix)), None)
+        if component is not None:
+            accumulate(component_accumulators, component, grad)
+
+    result = finalize(broad_accumulators)
+    total_square = sum(
+        (entry["square_sum"] for entry in broad_accumulators.values()),
+        start=torch.zeros(()) if not broad_accumulators else
+        next(iter(broad_accumulators.values()))["square_sum"].new_zeros(()),
+    )
+    result["total_l2_norm"] = float(total_square.sqrt())
+    # These decoder sub-groups are the earliest warning that an OBB head is
+    # disconnected even when the aggregate decoder gradient remains healthy.
+    result["components"] = finalize(component_accumulators)
     return result
 
 
@@ -153,6 +231,17 @@ def _training_observations(samples, targets, outputs):
     denoising_meta = outputs.get("dn_meta", {})
     decoder_outputs = [*outputs.get("aux_outputs", []), outputs]
     denoising_outputs = outputs.get("dn_outputs", [])
+    target_width_height = target_boxes[:, 2:4]
+    target_minor_side = target_width_height.amin(dim=-1) \
+        if len(target_boxes) else target_boxes.new_empty(0)
+    target_major_side = target_width_height.amax(dim=-1) \
+        if len(target_boxes) else target_boxes.new_empty(0)
+    target_angle = torch.remainder(target_boxes[:, 4], 1.0) \
+        if len(target_boxes) else target_boxes.new_empty(0)
+    query_width_height = boxes[..., 2:4]
+    query_minor_side = query_width_height.amin(dim=-1)
+    query_major_side = query_width_height.amax(dim=-1)
+    query_angle = torch.remainder(boxes[..., 4], 1.0)
     return {
         "numerics": {
             "samples_dtype": str(samples.dtype),
@@ -182,7 +271,19 @@ def _training_observations(samples, targets, outputs):
             "center_y": _distribution(target_boxes[:, 1] if len(target_boxes) else target_boxes),
             "width": _distribution(target_boxes[:, 2] if len(target_boxes) else target_boxes),
             "height": _distribution(target_boxes[:, 3] if len(target_boxes) else target_boxes),
-            "angle_normalized": _distribution(target_boxes[:, 4] if len(target_boxes) else target_boxes),
+            "minor_side": _distribution(target_minor_side),
+            "area_normalized": _distribution(
+                target_width_height.prod(dim=-1)
+                if len(target_boxes) else target_boxes.new_empty(0)),
+            "aspect_ratio": _distribution(
+                target_major_side / target_minor_side.clamp_min(1e-12)),
+            "anisotropy": _distribution(
+                (target_boxes[:, 2] - target_boxes[:, 3]).abs() /
+                target_width_height.sum(dim=-1).clamp_min(1e-12)
+                if len(target_boxes) else target_boxes.new_empty(0)),
+            "angle_normalized": _distribution(target_angle),
+            "angle_seam_distance": _distribution(
+                torch.minimum(target_angle, 1.0 - target_angle)),
         },
         "queries": {
             "top_score": _distribution(top_scores),
@@ -192,7 +293,16 @@ def _training_observations(samples, targets, outputs):
             "center_y": _distribution(boxes[..., 1]),
             "width": _distribution(boxes[..., 2]),
             "height": _distribution(boxes[..., 3]),
-            "angle_normalized": _distribution(boxes[..., 4]),
+            "minor_side": _distribution(query_minor_side),
+            "area_normalized": _distribution(query_width_height.prod(dim=-1)),
+            "aspect_ratio": _distribution(
+                query_major_side / query_minor_side.clamp_min(1e-12)),
+            "anisotropy": _distribution(
+                (boxes[..., 2] - boxes[..., 3]).abs() /
+                query_width_height.sum(dim=-1).clamp_min(1e-12)),
+            "angle_normalized": _distribution(query_angle),
+            "angle_seam_distance": _distribution(
+                torch.minimum(query_angle, 1.0 - query_angle)),
         },
         "decoder_box_geometry": [
             {"layer": index, **_box_geometry_observations(layer["pred_boxes"])}
@@ -491,6 +601,8 @@ def evaluate(model: torch.nn.Module, criterion: torch.nn.Module, postprocessor,
     model_module = dist_utils.de_parallel(model)
     decoder = getattr(model_module, "decoder", None)
     previous_diagnostic_mode = None
+    previous_attention_mode = None
+    stage_evaluators = None
     if diagnostic_eval:
         diagnostics.start_evaluation(
             epoch, diagnostic_dataset, split="val",
@@ -498,7 +610,9 @@ def evaluate(model: torch.nn.Module, criterion: torch.nn.Module, postprocessor,
         if decoder is not None and hasattr(decoder, "set_diagnostic_mode"):
             previous_diagnostic_mode = bool(
                 getattr(getattr(decoder, "decoder", None), "diagnostic_mode", False))
-            decoder.set_diagnostic_mode(True)
+            previous_attention_mode = bool(
+                getattr(getattr(decoder, "decoder", None),
+                        "diagnostic_attention_mode", False))
 
     loader_wait_start = time.perf_counter()
     for samples, targets in metric_logger.log_every(data_loader, 10, header):
@@ -513,7 +627,11 @@ def evaluate(model: torch.nn.Module, criterion: torch.nn.Module, postprocessor,
         transfer_end = _synchronize_for_measurement(device, diagnostic_eval)
 
         if diagnostic_eval and decoder is not None and hasattr(decoder, "set_diagnostic_mode"):
-            decoder.set_diagnostic_mode(diagnostics.needs_detailed_eval_layers())
+            capture_attention = diagnostics.needs_detailed_eval_layers()
+            decoder.set_diagnostic_mode(
+                diagnostics.needs_layerwise_eval() or capture_attention,
+                capture_attention=capture_attention,
+            )
         outputs = model(samples)
         forward_end = _synchronize_for_measurement(device, diagnostic_eval)
 
@@ -548,6 +666,27 @@ def evaluate(model: torch.nn.Module, criterion: torch.nn.Module, postprocessor,
                 device=device,
             )
 
+            if diagnostics.needs_layerwise_eval():
+                stage_outputs = _refinement_stage_outputs(outputs)
+                if not stage_outputs:
+                    raise RuntimeError(
+                        "Full-validation layerwise diagnostics were requested, "
+                        "but the model did not expose the refinement-stage contract")
+                if stage_evaluators is None:
+                    if not hasattr(coco_evaluator, "clone_empty"):
+                        raise TypeError(
+                            "Layerwise diagnostics require an evaluator implementing clone_empty()")
+                    stage_evaluators = OrderedDict(
+                        (name, coco_evaluator.clone_empty()) for name in stage_outputs)
+                if tuple(stage_evaluators) != tuple(stage_outputs):
+                    raise RuntimeError("Refinement stage order changed between validation batches")
+                for name, stage_output in stage_outputs.items():
+                    stage_predictions = postprocessor(stage_output, targets)
+                    stage_evaluators[name].update({
+                        int(target["image_id"].item()): prediction
+                        for target, prediction in zip(targets, stage_predictions)
+                    })
+
         # if 'segm' in postprocessor.keys():
         #     target_sizes = torch.stack([t["size"] for t in targets], dim=0)
         #     results = postprocessor['segm'](results, outputs, orig_target_sizes, target_sizes)
@@ -567,11 +706,41 @@ def evaluate(model: torch.nn.Module, criterion: torch.nn.Module, postprocessor,
     if coco_evaluator is not None:
         coco_evaluator.accumulate()
         coco_evaluator.summarize()
+    refinement_stages = None
+    if stage_evaluators is not None:
+        for evaluator in stage_evaluators.values():
+            evaluator.synchronize_between_processes()
+            if hasattr(evaluator, "reuse_ground_truth_cache_from"):
+                evaluator.reuse_ground_truth_cache_from(coco_evaluator)
+            evaluator.accumulate(verbose=False)
+        stage_records = OrderedDict(
+            (name, _evaluator_metrics(evaluator))
+            for name, evaluator in stage_evaluators.items()
+        )
+        primary_metric = "mAP50_75_DOTA07"
+        first_name, final_name = next(iter(stage_records)), next(reversed(stage_records))
+        first_value = stage_records[first_name]["metrics"].get(primary_metric)
+        final_value = stage_records[final_name]["metrics"].get(primary_metric)
+        refinement_stages = {
+            "stage_order": list(stage_records),
+            "stages": stage_records,
+            "primary_metric": primary_metric,
+            "pre_to_final_delta": (
+                final_value - first_value
+                if first_value is not None and final_value is not None else None),
+            "final_stage_matches_primary_evaluator": (
+                list(stage_records[final_name]["stats"])
+                == list(getattr(coco_evaluator, "stats", []))
+            ),
+        }
     if diagnostic_eval:
         diagnostics.record_global_merge(coco_evaluator)
-        diagnostics.finish_evaluation(coco_evaluator)
+        diagnostics.finish_evaluation(coco_evaluator, refinement_stages)
         if previous_diagnostic_mode is not None:
-            decoder.set_diagnostic_mode(previous_diagnostic_mode)
+            decoder.set_diagnostic_mode(
+                previous_diagnostic_mode,
+                capture_attention=previous_attention_mode,
+            )
 
     stats = {}
     # stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}

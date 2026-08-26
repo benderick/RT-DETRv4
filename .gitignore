@@ -221,6 +221,11 @@ engine/data/*
 engine/data/dataset/*
 !engine/data/dataset/dota_obb_dataset.py
 !engine/data/dataset/uav_rod_dataset.py
+!engine/data/dataset/codrone_tiling.py
 !test/framework/data/
 test/framework/data/*
+!test/framework/data/__init__.py
+!test/framework/data/test_codrone_data.py
+!test/framework/data/test_codrone_tiling.py
+!test/framework/data/test_full_dataset_audit.py
 !test/framework/data/test_uav_rod_data.py

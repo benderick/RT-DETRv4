@@ -12,7 +12,7 @@ O² 是主 OBB 实现。唯一保留的对照是独立的标量角度回归头�
 原图配置和一个标准切片配置；精确的四入口约定记录在
 [框架 OBB 约定](../../framework/obb_conventions.md)。
 
-两条路径都不使用 Mosaic、MixUp 或 batch multi-scale resize。当前正式 recipe 使用 1024 网络画布、30 epoch，以及相同的 HGNetv2-B2 模型容量，用于受控比较。
+两条路径都不使用 Mosaic、MixUp 或 batch multi-scale resize。当前正式 recipe 使用 1024 网络画布、72 epochs，以及相同的 HGNetv2-B2 模型容量，用于受控比较。
 
 CODrone 评估报告 IoU 0.5 和 0.75 下的 DOTA-07 AP。checkpoint 选择使用 `mAP50/75 DOTA-07`；COCO 风格的 `mAP@[.50:.95]` 仅作为诊断指标。
 

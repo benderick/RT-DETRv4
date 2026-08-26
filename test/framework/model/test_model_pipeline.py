@@ -31,13 +31,12 @@ def build_criterion(refinement_mode="o2_adr"):
          "cost_bbox": 0 if is_o2 else 5,
          "cost_angle": 0 if is_o2 else 2,
          "cost_kld": 2,
-         "cost_chamfer": 5 if is_o2 else 0.5},
-        chamfer_distance="released_l2",
-    )
+         "cost_chamfer": 5 if is_o2 else 0.5})
     return RotatedRTv4Criterion(
-        matcher, {"loss_focal": 1, "loss_bbox": 5,
+        matcher, {"loss_vfl": 1, "loss_bbox": 5,
                   "loss_angle": 5 if is_o2 else 2,
                   "loss_kld": 2, "loss_fgl": 0.15},
+        losses=("vfl", "boxes", "local"), alpha=.75,
         num_classes=3, reg_max=8)
 
 
@@ -70,9 +69,9 @@ class ModelPipelineTest(unittest.TestCase):
         targets = [{"labels": torch.zeros(count, dtype=torch.long),
                     "boxes": torch.rand(count, 5).clamp(.01, .99)}]
         _, boxes, mask, meta = get_rotated_contrastive_denoising_training_group(
-            targets, 3, 600, embedding, num_denoising=100)
+            targets, 3, 300, embedding, num_denoising=100)
         self.assertLessEqual(boxes.shape[1], 200)
-        self.assertEqual(mask.shape[0], boxes.shape[1] + 600)
+        self.assertEqual(mask.shape[0], boxes.shape[1] + 300)
         self.assertEqual(len(meta["dn_target_idx"][0]), 100)
 
     def test_postprocessor_restores_original_coordinates(self):

@@ -166,14 +166,17 @@ def _summarize_run(run_path: Path, epoch: str, nms_sample_limit=20000):
 
     queries = list(_records(directory, "queries"))
     layer_values = defaultdict(lambda: defaultdict(list))
+    layer_names = {}
     for query in queries:
         if query.get("matched_gt_index") is None:
             continue
-        for layer in query.get("layers", []):
+        for stage in query.get("stages", []):
+            position = int(stage.get("stage_index", -1)) + 1
+            layer_names[position] = stage.get("display_name", str(position))
             for field in ("center_error_px", "angle_error_deg", "rotated_iou", "target_class_score"):
-                value = layer.get(field)
+                value = stage.get(field)
                 if value is not None:
-                    layer_values[int(layer["layer"])][field].append(value)
+                    layer_values[position][field].append(value)
 
     training_mechanisms = defaultdict(lambda: {
         "assignment_instability": [], "ocd_modes": Counter(),
@@ -294,8 +297,9 @@ def _summarize_run(run_path: Path, epoch: str, nms_sample_limit=20000):
             }
             for status in nms_counts
         },
-        "decoder_layers": {
-            str(layer): {field: {"mean": _mean(values), "median": _quantile(values, 0.5)}
+        "refinement_stages": {
+            layer_names.get(layer, str(layer)): {
+                field: {"mean": _mean(values), "median": _quantile(values, 0.5)}
                          for field, values in fields.items()}
             for layer, fields in sorted(layer_values.items())
         },
@@ -320,6 +324,7 @@ def _summarize_run(run_path: Path, epoch: str, nms_sample_limit=20000):
         "matches": matches, "metrics": metrics, "class_rows": class_rows,
         "size_rows": size_rows, "nms_sample": nms_sample,
         "boundary_rows": boundary_rows, "layer_values": layer_values,
+        "layer_names": layer_names,
         "merge_rows": merge_rows, "training_mechanisms": training_mechanisms,
     }
 
@@ -461,10 +466,13 @@ def _plot(output, runs):
             axis.plot(layers, [_quantile(run["layer_values"][layer][field], 0.5)
                                for layer in layers], marker="o", label=label)
             axis.set_title(title)
-            axis.set_xlabel("decoder layer")
+            axis.set_xlabel("refinement stage")
             axis.grid(alpha=0.2)
+            axis.set_xticks(
+                layers, [run["layer_names"].get(layer, str(layer)) for layer in layers],
+                rotation=20, ha="right")
     axes[0].legend()
-    figure.suptitle("Matched-query refinement across decoder layers")
+    figure.suptitle("Matched-query refinement from pre-box through decoder layers")
     figure.tight_layout()
     figure.savefig(output / "decoder_refinement.png", dpi=180)
     plt.close(figure)

@@ -7,6 +7,7 @@ Task1 export, tiled prediction merge, and the corresponding diagnostics.
 
 from __future__ import annotations
 
+import copy
 import json
 import numpy as np
 import torch
@@ -61,6 +62,24 @@ class DotaOBBEvaluator:
         # Keep it aligned with MMRotate DOTAMetric(iou_thrs=[0.5, 0.75]):
         # DOTA/VOC AP averaged over AP50 and AP75, not COCO AP@[.50:.95].
         self.stats = np.zeros(6, dtype=np.float64)
+
+    def clone_empty(self):
+        """Create an evaluator with identical protocol and no predictions.
+
+        Shallow-copying is intentional: immutable dataset/protocol state and
+        the read-only ground-truth cache are shared, while ``cleanup`` resets
+        every prediction/result container.  This gives diagnostics a generic
+        way to evaluate pre-box and decoder stages without rebuilding
+        dataset-specific evaluators or duplicating their merge policy.
+        """
+
+        evaluator = copy.copy(self)
+        evaluator.cleanup()
+        return evaluator
+
+    def reuse_ground_truth_cache_from(self, evaluator):
+        self._ground_truth_by_class = evaluator._ground_truth_by_class
+        self._positives_by_class = evaluator._positives_by_class
 
     def update(self, predictions):
         for image_id, prediction in predictions.items():
@@ -157,7 +176,7 @@ class DotaOBBEvaluator:
                 best_matches[image_id] = torch.full((num_detections,), -1, dtype=torch.long)
                 continue
             overlaps = rotated_iou(
-                detections["boxes"], record["boxes"], normalized_angle=False)
+                detections["boxes"], record["boxes"], model_space=False)
             best_overlaps[image_id], best_matches[image_id] = overlaps.max(dim=1)
 
         threshold_values = thresholds.tolist()
@@ -227,16 +246,17 @@ class DotaOBBEvaluator:
         return self._ap_from_detections(
             true_positive[0], false_positive[0], positives, use_07_metric)
 
-    def accumulate(self):
+    def accumulate(self, verbose=True):
         class_count = len(self.dataset.classes)
         aps = np.full((class_count, len(self.iou_thresholds)), np.nan, dtype=np.float64)
         dota_ap50 = np.full(class_count, np.nan, dtype=np.float64)
         dota_ap75 = np.full(class_count, np.nan, dtype=np.float64)
         total_predictions = sum(len(prediction["scores"]) for prediction in self.predictions.values())
         start = perf_counter()
-        print(
-            f"DOTA OBB evaluator: computing AP for {len(self.predictions)} images, "
-            f"{total_predictions} predictions")
+        if verbose:
+            print(
+                f"DOTA OBB evaluator: computing AP for {len(self.predictions)} images, "
+                f"{total_predictions} predictions")
         threshold_50 = int(np.argmin(np.abs(self.iou_thresholds - 0.5)))
         threshold_75 = int(np.argmin(np.abs(self.iou_thresholds - 0.75)))
         for class_index in range(class_count):
@@ -259,10 +279,11 @@ class DotaOBBEvaluator:
                     false_positive[threshold_75],
                     positives,
                     use_07_metric=self.use_07_metric)
-            print(
-                f"  [{class_index + 1:02d}/{class_count:02d}] "
-                f"{self.dataset.classes[class_index]} AP50={dota_ap50[class_index]:.4f} "
-                f"AP75={dota_ap75[class_index]:.4f}")
+            if verbose:
+                print(
+                    f"  [{class_index + 1:02d}/{class_count:02d}] "
+                    f"{self.dataset.classes[class_index]} AP50={dota_ap50[class_index]:.4f} "
+                    f"AP75={dota_ap75[class_index]:.4f}")
         dota_map50_75 = self._nanmean_or_zero(np.stack((dota_ap50, dota_ap75), axis=1))
         self.stats = np.asarray([
             dota_map50_75,
@@ -294,7 +315,8 @@ class DotaOBBEvaluator:
             }
             for index, name in enumerate(self.dataset.classes)
         }
-        print(f"DOTA OBB evaluator: AP done in {perf_counter() - start:.1f}s")
+        if verbose:
+            print(f"DOTA OBB evaluator: AP done in {perf_counter() - start:.1f}s")
 
     def summarize(self):
         print("DOTA OBB evaluation (original-image coordinates)")
@@ -465,9 +487,9 @@ class MergedDotaOBBEvaluator(DotaOBBEvaluator):
             if not len(suppressed) or not len(retained):
                 continue
             overlaps = rotated_iou(
-                boxes[suppressed], boxes[retained], normalized_angle=False)
+                boxes[suppressed], boxes[retained], model_space=False)
             higher_score = scores[retained][None, :] >= scores[suppressed][:, None]
-            eligible = higher_score & (overlaps >= self.merge_iou_threshold)
+            eligible = higher_score & (overlaps > self.merge_iou_threshold)
             has_parent = eligible.any(dim=1)
             first_parent = eligible.to(torch.int8).argmax(dim=1)
             parent[suppressed[has_parent]] = retained[first_parent[has_parent]]
@@ -489,7 +511,7 @@ class MergedDotaOBBEvaluator(DotaOBBEvaluator):
                 continue
             overlaps = rotated_iou(
                 boxes[candidates], annotation["boxes"][gt_indices].float(),
-                normalized_angle=False)
+                model_space=False)
             values, local_indices = overlaps.max(dim=1)
             best_iou[candidates] = values
             best_gt[candidates] = gt_indices[local_indices]
@@ -762,9 +784,9 @@ class MergedDotaOBBEvaluator(DotaOBBEvaluator):
         }
         self._tile_predictions_merged = True
 
-    def accumulate(self):
+    def accumulate(self, verbose=True):
         self._merge_tile_predictions()
-        super().accumulate()
+        super().accumulate(verbose=verbose)
 
     def summarize(self):
         super().summarize()

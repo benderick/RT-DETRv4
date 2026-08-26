@@ -5,11 +5,16 @@ __include__: [
 
 output_dir: ./logs/uav_rod/dfine_obb_o2
 
-num_top_queries: 300
+# UAV-ROD is the first mechanism acceptance dataset.  Full-validation metrics
+# are retained for every refinement stage at every epoch, while object-level
+# distributions/images are sampled every five epochs for paper figures.
+diagnostics_layerwise_epoch_interval: 1
+diagnostics_detailed_epoch_interval: 5
+diagnostics_detailed_image_limit: 24
+diagnostics_query_topk: 20
 
-RotatedDFINETransformer:
-  num_queries: 300
+train_dataloader:
+  total_batch_size: 8
 
-RotatedPostProcessor:
-  num_top_queries: 300
-  max_detections: 300
+val_dataloader:
+  total_batch_size: 8

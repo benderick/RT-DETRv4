@@ -55,10 +55,10 @@ class MergedDotaOBBEvaluatorTest(unittest.TestCase):
         evaluator.update(self._perfect_tile_predictions(tile_dataset))
         evaluator.accumulate()
         self.assertEqual(evaluator.merge_summary["candidate_count_after_local_nms"], 709)
-        self.assertEqual(evaluator.merge_summary["kept_after_global_nms"], 481)
-        self.assertEqual(evaluator.merge_summary["global_nms_suppressed"], 228)
-        self.assertEqual(evaluator.merge_summary["same_best_gt_suppressions"], 195)
-        self.assertEqual(evaluator.merge_summary["different_best_gt_suppressions"], 33)
+        self.assertEqual(evaluator.merge_summary["kept_after_global_nms"], 482)
+        self.assertEqual(evaluator.merge_summary["global_nms_suppressed"], 227)
+        self.assertEqual(evaluator.merge_summary["same_best_gt_suppressions"], 196)
+        self.assertEqual(evaluator.merge_summary["different_best_gt_suppressions"], 31)
         self.assertAlmostEqual(
             evaluator.metrics["mAP50_75_DOTA07"], 0.9772727272727273)
 

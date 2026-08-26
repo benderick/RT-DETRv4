@@ -137,22 +137,14 @@ class KLDAndChamferParityTest(unittest.TestCase):
             criterion(outputs, targets)
         self.assertIn("loss_bbox", criterion.last_nonfinite_losses)
 
-    def test_chamfer_modes_name_the_paper_source_disagreement(self):
+    def test_chamfer_matches_the_public_o2_definition(self):
         first = torch.tensor([[.5, .5, .2, .1, 0.]])
         second = torch.tensor([[.51, .5, .2, .1, 0.]])
-        paper = pairwise_chamfer_cost(
-            first, second, distance_mode="paper_squared")
-        released = pairwise_chamfer_cost(
-            first, second, distance_mode="released_l2")
-        self.assertAlmostEqual(float(paper), 2 * .01 ** 2, places=7)
-        self.assertAlmostEqual(float(released), 2 * .01, places=6)
-        with self.assertRaisesRegex(ValueError, "Unknown Chamfer distance mode"):
-            pairwise_chamfer_cost(
-                first, second, distance_mode="ambiguous")
+        distance = pairwise_chamfer_cost(first, second)
+        self.assertAlmostEqual(float(distance), 2 * .01, places=6)
 
         matcher = RotatedHungarianMatcher(
             {"cost_class": 2, "cost_kld": 2, "cost_chamfer": 5},
-            chamfer_distance="released_l2",
             kld_sqrt=False,
             kld_fun="log1p",
             kld_tau=1,
@@ -163,8 +155,10 @@ class KLDAndChamferParityTest(unittest.TestCase):
             [{"labels": torch.tensor([0]), "boxes": second}],
             return_costs=True,
         )
-        self.assertEqual(report["chamfer_distance"], "released_l2")
-        self.assertEqual(report["chamfer_source_alignment"], "released O2-RTDETR source")
+        self.assertEqual(
+            report["chamfer_distance"], "bidirectional_mean_euclidean")
+        self.assertEqual(
+            report["chamfer_source_alignment"], "public O2 detector source")
         self.assertEqual(report["kld"], {
             "sqrt": False,
             "fun": "log1p",
@@ -181,61 +175,83 @@ class KLDAndChamferParityTest(unittest.TestCase):
 
         kld = pairwise_kld_cost(
             square, different_geometry, sqrt=False, fun="log1p", tau=1)
-        cdc = pairwise_chamfer_cost(
-            square, different_geometry, distance_mode="released_l2")
-        equivalent_cdc = pairwise_chamfer_cost(
-            square, equivalent_geometry, distance_mode="released_l2")
+        cdc = pairwise_chamfer_cost(square, different_geometry)
+        equivalent_cdc = pairwise_chamfer_cost(square, equivalent_geometry)
         torch.testing.assert_close(kld, torch.zeros_like(kld), atol=1e-14, rtol=0)
         self.assertGreater(float(cdc), 0.01)
         torch.testing.assert_close(
             equivalent_cdc, torch.zeros_like(equivalent_cdc), atol=1e-14, rtol=0)
 
 
-class SquareAwareAngleLossTest(unittest.TestCase):
+class SourceAlignedQualityAndAngleLossTest(unittest.TestCase):
+    def test_vfl_accepts_mixed_precision_predictions_and_float_targets(self):
+        criterion = RotatedRTv4Criterion(
+            matcher=None,
+            weight_dict={"loss_vfl": 1.0},
+            losses=("vfl",),
+            alpha=.75,
+            num_classes=1,
+        )
+        outputs = {
+            "pred_logits": torch.tensor([[[0.0]]], dtype=torch.float16),
+            "pred_boxes": torch.tensor(
+                [[[.5, .5, .2, .1, .25]]], dtype=torch.float16),
+        }
+        targets = [{
+            "labels": torch.tensor([0]),
+            "boxes": torch.tensor([[.5, .5, .2, .1, .25]], dtype=torch.float32),
+        }]
+        indices = [(torch.tensor([0]), torch.tensor([0]))]
+        loss = criterion._classification_loss(
+            outputs, targets, indices, normalizer=1, kind="vfl")["loss_vfl"]
+        self.assertTrue(torch.isfinite(loss))
+
     @staticmethod
-    def _criterion(mode="square_aware_soft", threshold=.05):
+    def _criterion():
         return RotatedRTv4Criterion(
             matcher=None,
             weight_dict={},
             losses=("boxes",),
-            angle_loss_mode=mode,
-            square_anisotropy_threshold=threshold,
         )
 
-    def test_exact_square_quarter_turn_has_zero_angle_loss(self):
-        target = torch.tensor([[.5, .5, .2, .2, .1]])
-        prediction = target.clone()
-        prediction[:, 4] += .5
-        adjusted, ordinary, blend = self._criterion()._angle_loss_terms(
-            prediction, target)
-        torch.testing.assert_close(ordinary, torch.tensor([.5]))
-        torch.testing.assert_close(adjusted, torch.zeros(1))
-        torch.testing.assert_close(blend, torch.zeros(1))
-
-    def test_near_square_transitions_softly_and_rectangle_is_unchanged(self):
+    def test_hbox_quality_matches_dfine_and_is_angle_invariant(self):
         target = torch.tensor([
-            [.5, .5, .21, .20, .1],
-            [.5, .5, .40, .20, .1],
+            [.50, .50, .20, .10, .02],
+            [.25, .25, .20, .20, .10],
         ])
-        prediction = target.clone()
-        prediction[:, 4] += .5
-        adjusted, ordinary, blend = self._criterion()._angle_loss_terms(
-            prediction, target)
-        expected_blend = (.01 / .41) / .05
-        self.assertAlmostEqual(float(blend[0]), expected_blend, places=6)
-        self.assertAlmostEqual(float(adjusted[0]), .5 * expected_blend, places=6)
-        self.assertAlmostEqual(float(ordinary[0]), .5, places=6)
-        self.assertEqual(float(blend[1]), 1.0)
-        self.assertEqual(float(adjusted[1]), float(ordinary[1]))
+        prediction = torch.tensor([
+            [.50, .50, .20, .10, .73],
+            [.30, .25, .20, .20, .90],
+        ])
+        quality = self._criterion()._aligned_xywh_quality(prediction, target)
+        torch.testing.assert_close(quality, torch.tensor([1.0, 0.6]))
+        changed_angle = prediction.clone()
+        changed_angle[:, 4] = torch.tensor([.11, .31])
+        torch.testing.assert_close(
+            self._criterion()._aligned_xywh_quality(changed_angle, target),
+            quality,
+        )
 
-    def test_paper_baseline_mode_remains_explicitly_available(self):
-        target = torch.tensor([[.5, .5, .2, .2, .1]])
-        prediction = target.clone()
-        prediction[:, 4] += .5
-        adjusted, ordinary, blend = self._criterion(
-            "periodic_pi")._angle_loss_terms(prediction, target)
-        torch.testing.assert_close(adjusted, ordinary)
-        torch.testing.assert_close(blend, torch.ones(1))
+    def test_raw_angle_l1_and_periodic_geometry_are_both_visible(self):
+        target_boxes = torch.tensor([[.5, .5, .30, .10, .01]])
+        pred_boxes = target_boxes.clone()
+        pred_boxes[:, 4] = .99
+        outputs = {
+            "pred_logits": torch.tensor([[[8., -8.]]]),
+            "pred_boxes": pred_boxes.unsqueeze(0),
+        }
+        targets = [{"labels": torch.tensor([0]), "boxes": target_boxes}]
+        indices = [(torch.tensor([0]), torch.tensor([0]))]
+        losses = self._criterion()._box_losses(outputs, targets, indices, 1)
+        self.assertAlmostEqual(float(losses["loss_angle"]), .98, places=6)
+        diagnostics = self._criterion()._main_match_diagnostics(
+            outputs, targets, indices)
+        self.assertAlmostEqual(
+            diagnostics["angle_error_deg"]["mean"], 3.6, places=4)
+        self.assertAlmostEqual(
+            diagnostics["angle_loss_error_deg"]["mean"], 176.4, places=4)
+        self.assertEqual(
+            diagnostics["square_symmetry"]["angle_seam_disagreement_count"], 1)
 
     def test_diagnostics_expose_the_remaining_adr_axis_chart_seam(self):
         criterion = self._criterion()
@@ -376,14 +392,12 @@ class DfineUnionAndCrowdedOCDTest(unittest.TestCase):
             "kld_sqrt: False",
             "kld_fun: log1p",
             "kld_tau: 1.0",
-            "chamfer_distance: released_l2",
             "num_denoising: 100",
-            "angle_loss_mode: periodic_pi",
-            "square_anisotropy_threshold: 0.0",
+            "losses: [vfl, boxes, local]",
+            "loss_vfl: 1.0",
         ):
             self.assertIn(declaration, text)
         self.assertNotIn("amp_abort_min_scale", text)
-        self.assertNotIn("angle_loss_mode: square_aware_soft", text)
 
 
 if __name__ == "__main__":

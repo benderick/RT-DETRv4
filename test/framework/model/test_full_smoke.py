@@ -24,9 +24,10 @@ class FullDFINESmokeTest(unittest.TestCase):
         with torch.autocast(
                 device_type="cuda", enabled=bool(config.use_amp)):
             outputs = model(images, targets)
-        # Match the real engine: model forward is autocast, geometry/loss is
-        # evaluated outside autocast. The historical O² failure had a finite
-        # loss but non-finite backward, so loss-only assertions are insufficient.
+        # Match the real engine: model forward is autocast, while geometry and
+        # losses are evaluated outside autocast. Backward finiteness is checked
+        # independently because a finite scalar loss does not guarantee finite
+        # parameter gradients.
         with torch.autocast(device_type="cuda", enabled=False):
             loss = sum(
                 criterion(outputs, targets, collect_diagnostics=True).values())
@@ -38,6 +39,22 @@ class FullDFINESmokeTest(unittest.TestCase):
             for parameter in model.parameters() if parameter.grad is not None
         )
         self.assertEqual(nonfinite_gradients, 0)
+        decoder = model.decoder
+        if decoder.refinement_mode == "o2_adr":
+            self.assertIn("pre_outputs", outputs)
+            pre_gradient = decoder.pre_bbox_head.layers[-1].weight.grad
+            self.assertIsNotNone(pre_gradient)
+            self.assertGreater(float(pre_gradient.detach().abs().sum()), 0.0)
+            for layer_index, head in enumerate(decoder.dec_bbox_head):
+                gradient = head.layers[-1].weight.grad
+                self.assertIsNotNone(
+                    gradient, f"ADR layer {layer_index} has no gradient")
+                self.assertTrue(
+                    torch.isfinite(gradient).all(),
+                    f"ADR layer {layer_index} has non-finite gradients")
+                self.assertGreater(
+                    float(gradient.detach().abs().sum()), 0.0,
+                    f"ADR layer {layer_index} has a zero gradient")
         self.assertGreater(criterion.last_diagnostics["matched_count"], 0)
         model.eval()
         with torch.inference_mode():

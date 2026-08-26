@@ -1,10 +1,11 @@
 __include__: [
-  './dfine_obb_angle.yml',
+  '../dataset/codrone_obb.yml',
+  '../runtime.yml',
+  '../base/optimizer.yml',
+  '../base/dfine_obb.yml',
 ]
 
-# Primary paper-derived O²-DFINE model. The public O² repository does not
-# expose the DFINE/ADR decoder, so this configuration deliberately records
-# which semantics follow the paper and which follow released O²-RTDETR code.
+# Primary paper-derived O²-DFINE model.
 output_dir: ./logs/dfine_obb_o2
 
 RotatedDFINETransformer:
@@ -24,26 +25,24 @@ RotatedDFINETransformer:
   adr_a: 0.5
   adr_c: 0.25
 
-# O²/DETR is a set predictor.  The frozen 2000-image acceptance audit shows
-# that overlap NMS is unnecessary on full-image inference and slightly lowers
-# the primary metric (0.2324 -> 0.2315).  Tile variants override this because
-# local/global duplicate removal is part of partition merging.
+# O²/DETR is a set predictor, so full-image inference is NMS-free.  Tile
+# variants override this because duplicate removal is part of merging several
+# overlapping views back into one source image.
 RotatedPostProcessor:
   apply_nms: False
 
 RotatedRTv4Criterion:
   # D-FINE source semantics: decoder-wide geometric union matching.
   use_uni_set: True
+  losses: [vfl, boxes, local]
+  alpha: 0.75
+  gamma: 2.0
   # Released O² configs use KLD(log1p, tau=1, sqrt=False).
   kld_sqrt: False
   kld_fun: log1p
   kld_tau: 1.0
-  # Reproduction mode: retain the paper's ordinary pi-periodic angle L1.
-  # Square-aware variants belong to later local ideas, not to the O² baseline.
-  angle_loss_mode: periodic_pi
-  square_anisotropy_threshold: 0.0
   weight_dict:
-    loss_focal: 1.0
+    loss_vfl: 1.0
     loss_bbox: 5.0
     loss_angle: 5.0
     loss_kld: 2.0
@@ -56,11 +55,8 @@ RotatedRTv4Criterion:
       cost_angle: 0.0
       cost_kld: 2.0
       cost_chamfer: 5.0
-    # The manuscript equation writes squared distance, while every released
-    # O² configuration obtains its reported results with ordinary L2 in
-    # ChamferCost. Reproduction defaults to the executable source semantics;
-    # paper_squared remains available only for an explicitly named study.
-    chamfer_distance: released_l2
+    # Author-released O² detectors use bidirectional mean Euclidean distance
+    # between the four corner sets.
     kld_sqrt: False
     kld_fun: log1p
     kld_tau: 1.0

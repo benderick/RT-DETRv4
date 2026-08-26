@@ -47,8 +47,8 @@ class EvaluatorEfficiencyTest(unittest.TestCase):
         calls = []
         original_rotated_iou = dota_eval_module.rotated_iou
 
-        def fake_rotated_iou(boxes1, boxes2, aligned=False, normalized_angle=True):
-            calls.append((tuple(boxes1.shape), tuple(boxes2.shape), aligned, normalized_angle))
+        def fake_rotated_iou(boxes1, boxes2, aligned=False, model_space=True):
+            calls.append((tuple(boxes1.shape), tuple(boxes2.shape), aligned, model_space))
             return (boxes1[:, None, 0] == boxes2[None, :, 0]).to(torch.float32)
 
         dota_eval_module.rotated_iou = fake_rotated_iou

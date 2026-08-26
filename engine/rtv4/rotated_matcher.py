@@ -9,7 +9,6 @@ from scipy.optimize import linear_sum_assignment
 
 from ..core import register
 from .rotated_box_ops import (
-    CHAMFER_DISTANCE_MODES,
     angle_distance,
     pairwise_chamfer_cost,
     pairwise_kld_cost,
@@ -26,7 +25,6 @@ class RotatedHungarianMatcher(nn.Module):
         use_focal_loss=True,
         alpha=0.25,
         gamma=2.0,
-        chamfer_distance="released_l2",
         kld_sqrt=False,
         kld_fun="log1p",
         kld_tau=1.0,
@@ -42,13 +40,8 @@ class RotatedHungarianMatcher(nn.Module):
         self.use_focal_loss = use_focal_loss
         self.alpha = alpha
         self.gamma = gamma
-        if chamfer_distance not in CHAMFER_DISTANCE_MODES:
-            raise ValueError(
-                f"Unknown Chamfer distance {chamfer_distance!r}; "
-                f"expected one of {CHAMFER_DISTANCE_MODES}")
         if kld_fun not in {"log1p", "sqrt", "none"}:
             raise ValueError(f"Unsupported KLD post-processing function: {kld_fun!r}")
-        self.chamfer_distance = chamfer_distance
         self.kld_sqrt = bool(kld_sqrt)
         self.kld_fun = str(kld_fun)
         self.kld_tau = float(kld_tau)
@@ -86,7 +79,7 @@ class RotatedHungarianMatcher(nn.Module):
             )
         if self.weights["chamfer"]:
             components["chamfer"] = pairwise_chamfer_cost(
-                prediction, target_boxes, distance_mode=self.chamfer_distance)
+                prediction, target_boxes)
         return components
 
     @torch.no_grad()
@@ -150,12 +143,8 @@ class RotatedHungarianMatcher(nn.Module):
             response["matched_costs"] = matched_costs
             response["candidate_costs"] = candidate_costs
             response["weights"] = dict(self.weights)
-            response["chamfer_distance"] = self.chamfer_distance
-            response["chamfer_source_alignment"] = (
-                "O2-DFINE paper Eq. 10"
-                if self.chamfer_distance == "paper_squared"
-                else "released O2-RTDETR source"
-            )
+            response["chamfer_distance"] = "bidirectional_mean_euclidean"
+            response["chamfer_source_alignment"] = "public O2 detector source"
             response["kld"] = {
                 "sqrt": self.kld_sqrt,
                 "fun": self.kld_fun,

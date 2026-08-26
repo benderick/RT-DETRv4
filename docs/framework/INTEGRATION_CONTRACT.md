@@ -37,6 +37,7 @@ engine/rtv4/                      # detector、matcher、criterion、postprocess
 engine/rtv4/obb/methods/o2/       # O² 私有 ADR 原语
 
 configs/dataset/                  # 数据协议
+configs/base/                     # 方法间共享的内部模型/优化基座
 configs/dfine/                    # 稳定训练入口
 configs/experiments/<dataset>/    # 数据集与稳定模型的可运行绑定
 docs/framework/                   # 公共契约与坐标规范
@@ -118,8 +119,7 @@ DOTA 兼容数据集必须复用 `DotaOBBEvaluator`；切片求值复用
 
 正式指标在原图坐标计算。普通 full-image 和 tile 推理必须显式区分后处理语义：
 
-- O² full-image 是 DETR 集合预测，默认不做 overlap NMS；
-- direct-angle full-image 暂时保留已固化基线的历史 NMS 语义；
+- O² 与 direct-angle 的 full-image 推理都是 DETR 集合预测，默认不做 overlap NMS；
 - tile 模式保留局部 NMS，并在恢复到原图后执行全局类别感知 rotated NMS。
 
 `RotatedPostProcessor.apply_nms` 必须由稳定配置解析为确定值。诊断对照可以在同一次
@@ -150,9 +150,18 @@ refinement_mode / world_size / device / dtype
 与 skipped step、数据等待时间、step time 和 peak memory。推理记录至少包括预处理、
 backbone、encoder、decoder、postprocess/NMS 时间以及峰值显存。
 
-逐层 query 记录必须保留 `reference_box`、预测框、类别置信度和方法对应的局部分布；
-O² 还需记录 ADR offset、codebook 覆盖和坐标缝暴露。大张量放 artifact，summary 只存
-索引与 hash。
+逐层 query 记录必须从 `pre_box` 开始，并区分：
+
+- `input_reference_box`：本层 query position 与 cross-attention 真正使用的框；
+- `initial_anchor_box`：D-FINE 累积分布始终解码所依赖的固定初始框；
+- 本层预测框、相对前一 stage 的几何变化、类别置信度与方法对应的局部分布。
+
+分布式精炼还必须分别记录原始 `P(n)`、固定码本加权后的 `A(n)P(n)`、积分结果以及
+LQE 前后 class logit；不能把固定 weighting function 与 LQE 的 MLP 混为同一机制。
+在声明的 epoch 间隔上，应以相同 postprocessor 和通用 evaluator 对完整验证集计算
+`pre_box -> decoder_0 -> ... -> decoder_L` 的逐 stage AP，并验证最后一层与正式 evaluator
+完全一致。O² 还需记录 ADR offset、raw six-value consistency、codebook 覆盖和 chart seam。
+大张量放 artifact，summary 只存索引与 hash。
 
 ## 9. 测试门槛
 
@@ -169,7 +178,7 @@ round-trip、周期等价、近轴/近方形、极端尺寸、非法输入、有
 ### 模型链路
 
 direct-angle 与 O² 均测试训练 forward、全部 loss、backward、eval forward、后处理、
-可视化和诊断落盘；已有 checkpoint 必须严格加载。
+逐 stage evaluator、固定对象跨 epoch/层可视化和诊断落盘；已有 checkpoint 必须严格加载。
 
 ### 公共入口
 

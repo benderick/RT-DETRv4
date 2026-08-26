@@ -15,13 +15,29 @@ from PIL import Image
 from engine.evaluation.obb import DotaOBBEvaluator
 from engine.diagnostics import OBBDiagnostics
 from engine.rtv4 import RotatedHungarianMatcher, RotatedPostProcessor, RotatedRTv4Criterion
-from engine.solver.det_engine import evaluate, train_one_epoch
+from engine.solver.det_engine import (
+    _gradient_statistics,
+    evaluate,
+    train_one_epoch,
+)
 from engine.solver.det_solver import DetSolver
 
 
 class _ToyDetector(nn.Module):
     def __init__(self):
         super().__init__()
+        class _Controller:
+            def __init__(self):
+                self.decoder = SimpleNamespace(
+                    diagnostic_mode=False, diagnostic_attention_mode=False)
+
+            def set_diagnostic_mode(self, enabled=True, capture_attention=None):
+                self.decoder.diagnostic_mode = bool(enabled)
+                self.decoder.diagnostic_attention_mode = bool(
+                    enabled if capture_attention is None else capture_attention)
+                return self
+
+        self.decoder = _Controller()
         self.logits = nn.Parameter(torch.tensor([[4.0], [-2.0]]))
         self.box_parameters = nn.Parameter(torch.tensor([
             [0.0, 0.0, -0.4, -1.4, -4.0],
@@ -30,10 +46,24 @@ class _ToyDetector(nn.Module):
 
     def forward(self, samples, targets=None, teacher_encoder_output=None):
         batch = len(samples)
-        return {
+        output = {
             "pred_logits": self.logits.sigmoid().logit().unsqueeze(0).expand(batch, -1, -1),
             "pred_boxes": self.box_parameters.sigmoid().unsqueeze(0).expand(batch, -1, -1),
         }
+        if self.decoder.decoder.diagnostic_mode:
+            pre_boxes = output["pred_boxes"].clone()
+            pre_boxes[..., 0] -= .03
+            layer0_boxes = output["pred_boxes"].clone()
+            layer0_boxes[..., 0] -= .01
+            output.update({
+                "diagnostic_pre_logits": output["pred_logits"] - .3,
+                "diagnostic_pre_boxes": pre_boxes,
+                "diagnostic_layer_logits": torch.stack((
+                    output["pred_logits"] - .1, output["pred_logits"])),
+                "diagnostic_layer_boxes": torch.stack((
+                    layer0_boxes, output["pred_boxes"])),
+            })
+        return output
 
 
 class _Dataset:
@@ -68,6 +98,42 @@ def _target():
 
 
 class DiagnosticEngineIntegrationTest(unittest.TestCase):
+    def test_obb_head_gradients_are_reported_separately(self):
+        class _GradientProbe(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.decoder = nn.Module()
+                self.decoder.enc_bbox_head = nn.Linear(2, 2)
+                self.decoder.pre_bbox_head = nn.Linear(2, 2)
+                self.decoder.dec_bbox_head = nn.Linear(2, 2)
+                self.decoder.dec_angle_head = nn.Linear(2, 1)
+                self.decoder.dec_score_head = nn.Linear(2, 1)
+                self.decoder.decoder = nn.Module()
+                self.decoder.decoder.lqe_layers = nn.Linear(2, 1)
+
+            def forward(self, value):
+                modules = (
+                    self.decoder.enc_bbox_head,
+                    self.decoder.pre_bbox_head,
+                    self.decoder.dec_bbox_head,
+                    self.decoder.dec_angle_head,
+                    self.decoder.dec_score_head,
+                    self.decoder.decoder.lqe_layers,
+                )
+                return sum(module(value).sum() for module in modules)
+
+        model = _GradientProbe()
+        model(torch.ones(1, 2)).backward()
+        statistics = _gradient_statistics(model)
+        self.assertEqual(set(statistics["components"]), {
+            "encoder_box_head", "pre_box_head", "box_refinement_heads",
+            "angle_refinement_heads", "classification_heads",
+            "location_quality_heads",
+        })
+        self.assertTrue(all(
+            record["l2_norm"] > 0 and record["nonfinite_count"] == 0
+            for record in statistics["components"].values()))
+
     def test_solver_closes_diagnostics_when_training_raises(self):
         class _ClosingDiagnostics(OBBDiagnostics):
             def __init__(self, *args, **kwargs):
@@ -117,6 +183,7 @@ class DiagnosticEngineIntegrationTest(unittest.TestCase):
             cfg = SimpleNamespace(
                 diagnostics_enabled=True, diagnostics_train_interval=1,
                 diagnostics_detailed_image_limit=1, diagnostics_query_topk=1,
+                diagnostics_layerwise_epoch_interval=1,
                 yaml_cfg={"model": "toy"}, resume=None,
             )
             diagnostics = OBBDiagnostics(cfg, directory)
@@ -141,10 +208,17 @@ class DiagnosticEngineIntegrationTest(unittest.TestCase):
             with gzip.open(next((root / "train").glob("steps.rank*.jsonl.gz")), "rt") as handle:
                 train_record = json.loads(handle.readline())
             self.assertIn("gradients_before_clip", train_record)
+            self.assertIn("components", train_record["gradients_before_clip"])
             self.assertIn("amp", train_record)
             self.assertFalse(train_record["amp"]["optimizer_step_skipped"])
             self.assertIn("forward", train_record["timing_ms"])
             self.assertIn("main_hungarian_matches", train_record)
+            self.assertEqual(train_record["targets"]["minor_side"]["count"], 1)
+            self.assertEqual(train_record["targets"]["area_normalized"]["count"], 1)
+            self.assertEqual(train_record["targets"]["aspect_ratio"]["count"], 1)
+            self.assertEqual(train_record["targets"]["anisotropy"]["count"], 1)
+            self.assertEqual(
+                train_record["targets"]["angle_seam_distance"]["count"], 1)
             diagnostics.close()
             eval_dir = root / "eval" / "epoch_0000"
             with gzip.open(next(eval_dir.glob("matches.rank*.jsonl.gz")), "rt") as handle:
@@ -157,6 +231,12 @@ class DiagnosticEngineIntegrationTest(unittest.TestCase):
             with (eval_dir / "metrics.json").open(encoding="utf-8") as handle:
                 metrics = json.load(handle)
             self.assertIn("AP50_DOTA07", metrics["metrics"])
+            with (eval_dir / "refinement_stages.json").open(encoding="utf-8") as handle:
+                refinement = json.load(handle)
+            self.assertEqual(
+                refinement["stage_order"],
+                ["pre_box", "decoder_0", "decoder_1"])
+            self.assertTrue(refinement["final_stage_matches_primary_evaluator"])
 
             analysis_dir = Path(directory) / "analysis"
             subprocess.run([

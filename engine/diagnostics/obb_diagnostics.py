@@ -28,7 +28,7 @@ from ..misc import dist_utils
 from ..rtv4.rotated_box_ops import angle_distance, rbox_to_corners, rotated_iou
 
 
-SCHEMA_VERSION = "obb-diagnostics-v4"
+SCHEMA_VERSION = "obb-diagnostics-v5"
 NMS_STATUS = {0: "kept", 1: "nms_overlap", 2: "max_detections"}
 
 
@@ -186,7 +186,7 @@ def _aligned_box_errors(predictions, targets):
             (targets[:, 2] * targets[:, 3]).clamp_min(1e-7)),
         "corner_chamfer_px": chamfer,
         "rotated_iou": rotated_iou(
-            predictions, targets, aligned=True, normalized_angle=False).clamp(0, 1),
+            predictions, targets, aligned=True, model_space=False).clamp(0, 1),
     }
 
 
@@ -230,7 +230,7 @@ def _model_structure(model):
 
     A full name/shape inventory makes later method comparisons possible from
     the run artifacts alone.  In particular, a refinement head can be compared
-    with a stable baseline without reconstructing either historical checkout.
+    with a stable baseline directly from the recorded runs.
     """
     if model is None:
         return None
@@ -296,6 +296,8 @@ class OBBDiagnostics:
         self.detailed_image_limit = max(0, int(getattr(cfg, "diagnostics_detailed_image_limit", 32)))
         self.detailed_epoch_interval = max(
             1, int(getattr(cfg, "diagnostics_detailed_epoch_interval", 1)))
+        self.layerwise_epoch_interval = max(
+            0, int(getattr(cfg, "diagnostics_layerwise_epoch_interval", 0)))
         self.total_epochs = int(getattr(cfg, "epoches", 0))
         self.query_topk = max(0, int(getattr(cfg, "diagnostics_query_topk", 50)))
         self.rank = dist_utils.get_rank()
@@ -307,6 +309,7 @@ class OBBDiagnostics:
         self._eval_batch_index = 0
         self._detailed_seen = 0
         self._detailed_eval_enabled = True
+        self._layerwise_eval_enabled = False
         self._counts = {}
         if not self.enabled:
             return
@@ -367,6 +370,7 @@ class OBBDiagnostics:
                     "model_structure": "model_structure.json",
                     "train_steps": "train/steps.rankNNN.jsonl.gz",
                     "eval": "eval/epoch_XXXX/{images,ground_truth,detections,matches,queries,nms}.rankNNN.jsonl.gz",
+                    "refinement_stage_metrics": "eval/epoch_XXXX/refinement_stages.json",
                 },
             }
             _write_json(self.root / "manifest.json", manifest)
@@ -381,6 +385,11 @@ class OBBDiagnostics:
     def needs_detailed_eval_layers(self):
         return self.enabled and self._detailed_eval_enabled and \
             self._detailed_seen < self.detailed_image_limit
+
+    def needs_layerwise_eval(self):
+        """Whether this epoch requires full-validation refinement metrics."""
+
+        return self.enabled and self._layerwise_eval_enabled
 
     def _writer(self, name, directory=None, append=True):
         directory = self.root if directory is None else Path(directory)
@@ -426,6 +435,13 @@ class OBBDiagnostics:
             epoch_number % self.detailed_epoch_interval == 0 or
             (self.total_epochs > 0 and epoch_number == self.total_epochs)
         )
+        self._layerwise_eval_enabled = bool(
+            self.layerwise_epoch_interval > 0 and (
+                epoch is None or int(epoch) == 0 or
+                epoch_number % self.layerwise_epoch_interval == 0 or
+                (self.total_epochs > 0 and epoch_number == self.total_epochs)
+            )
+        )
         self._counts = {name: 0 for name in (
             "images", "ground_truth", "detections", "matches", "queries", "nms",
             "merge_images", "merge_candidates")}
@@ -444,6 +460,8 @@ class OBBDiagnostics:
                 "detailed_image_limit_per_rank": self.detailed_image_limit,
                 "detailed_epoch_interval": self.detailed_epoch_interval,
                 "detailed_layers_enabled": self._detailed_eval_enabled,
+                "layerwise_epoch_interval": self.layerwise_epoch_interval,
+                "full_validation_layerwise_metrics_enabled": self._layerwise_eval_enabled,
                 "query_topk": self.query_topk,
                 "nms_status_codes": NMS_STATUS,
             })
@@ -460,10 +478,19 @@ class OBBDiagnostics:
     ):
         if not self.enabled:
             return
+        pre_logits = outputs.get("diagnostic_pre_logits")
+        pre_boxes = outputs.get("diagnostic_pre_boxes")
         layer_logits = outputs.get("diagnostic_layer_logits")
+        layer_raw_logits = outputs.get("diagnostic_layer_class_logits_before_lqe")
+        layer_lqe_delta = outputs.get("diagnostic_layer_lqe_logit_delta")
         layer_boxes = outputs.get("diagnostic_layer_boxes")
-        layer_refs = outputs.get("diagnostic_layer_refs")
+        layer_anchors = outputs.get("diagnostic_layer_anchors")
+        layer_input_refs = outputs.get("diagnostic_layer_input_refs")
         layer_distributions = outputs.get("diagnostic_layer_distributions")
+        layer_adr_residuals = outputs.get("diagnostic_layer_adr_residuals")
+        layer_adr_values = outputs.get("diagnostic_layer_adr_values")
+        layer_adr_orthogonality = outputs.get(
+            "diagnostic_layer_adr_raw_orthogonality_error")
         distribution_project = outputs.get("diagnostic_distribution_project")
         distribution_names = outputs.get("diagnostic_distribution_names", ())
         refinement_kind = outputs.get("diagnostic_refinement_kind")
@@ -660,7 +687,7 @@ class OBBDiagnostics:
                     continue
                 overlaps = rotated_iou(
                     result["boxes"][final_class_indices], gt_boxes[gt_class_indices],
-                    normalized_angle=False)
+                    model_space=False)
                 best_iou, best_local = overlaps.max(dim=0)
                 final_best_iou[gt_class_indices] = best_iou
                 final_best_index[gt_class_indices] = final_class_indices[best_local]
@@ -670,7 +697,7 @@ class OBBDiagnostics:
                     torch.ones(len(ignore_boxes), dtype=torch.bool)), dim=0)
                 evaluation_overlaps = rotated_iou(
                     result["boxes"][final_class_indices], evaluation_boxes,
-                    normalized_angle=False)
+                    model_space=False)
                 score_order = torch.argsort(
                     result["scores"][final_class_indices], descending=True)
                 for threshold, assigned in official_detection.items():
@@ -802,14 +829,31 @@ class OBBDiagnostics:
 
             if self._detailed_eval_enabled and \
                     self._detailed_seen < self.detailed_image_limit:
+                image_pre_logits = pre_logits[batch_index].detach().float().cpu() \
+                    if pre_logits is not None else None
+                image_pre_boxes = pre_boxes[batch_index].detach().float().cpu() \
+                    if pre_boxes is not None else None
                 image_layer_logits = layer_logits[:, batch_index].detach().cpu() \
                     if layer_logits is not None else None
+                image_layer_raw_logits = layer_raw_logits[:, batch_index].detach().float().cpu() \
+                    if layer_raw_logits is not None else None
+                image_layer_lqe_delta = layer_lqe_delta[:, batch_index].detach().float().cpu() \
+                    if layer_lqe_delta is not None else None
                 image_layer_boxes = layer_boxes[:, batch_index].detach().cpu() \
                     if layer_boxes is not None else None
-                image_layer_refs = layer_refs[:, batch_index].detach().float().cpu() \
-                    if layer_refs is not None else None
+                image_layer_anchors = layer_anchors[:, batch_index].detach().float().cpu() \
+                    if layer_anchors is not None else None
+                image_layer_input_refs = layer_input_refs[:, batch_index].detach().float().cpu() \
+                    if layer_input_refs is not None else None
                 image_layer_distributions = layer_distributions[:, batch_index].detach().float().cpu() \
                     if layer_distributions is not None else None
+                image_layer_adr_residuals = layer_adr_residuals[:, batch_index].detach().float().cpu() \
+                    if layer_adr_residuals is not None else None
+                image_layer_adr_values = layer_adr_values[:, batch_index].detach().float().cpu() \
+                    if layer_adr_values is not None else None
+                image_layer_adr_orthogonality = \
+                    layer_adr_orthogonality[:, batch_index].detach().float().cpu() \
+                    if layer_adr_orthogonality is not None else None
                 image_sampling_locations = sampling_locations[:, batch_index].detach().float().cpu() \
                     if sampling_locations is not None else None
                 image_sampling_unrotated = sampling_unrotated[:, batch_index].detach().float().cpu() \
@@ -826,38 +870,97 @@ class OBBDiagnostics:
                 query_to_gt = {
                     int(query): int(gt) for query, gt in zip(source_indices.tolist(), target_indices.tolist())
                 }
+
+                def restore_box(normalized):
+                    return _restore_target_boxes({
+                        **target, "boxes": normalized[None]
+                    })[0]
+
                 for query_index in sorted(selected):
                     gt_index = query_to_gt.get(query_index)
-                    layers = []
+                    stages = []
+
+                    if image_pre_logits is not None and image_pre_boxes is not None:
+                        logits = image_pre_logits[query_index]
+                        probability = logits.sigmoid()
+                        score, label = probability.max(dim=0)
+                        stage_box = restore_box(image_pre_boxes[query_index])
+                        stage_record = {
+                            "stage": "pre_box",
+                            "stage_index": -1,
+                            "display_name": "Pre-box",
+                            "box": stage_box,
+                            "top_score": score,
+                            "top_label": int(label),
+                        }
+                        if image_layer_input_refs is not None:
+                            input_box = restore_box(
+                                image_layer_input_refs[0, query_index])
+                            stage_record["input_reference_box"] = input_box
+                            if gt_index is not None:
+                                stage_record["input_reference_geometry"] = _box_errors(
+                                    input_box, gt_boxes[gt_index])
+                        if gt_index is not None:
+                            stage_record.update(_box_errors(
+                                stage_box, gt_boxes[gt_index]))
+                            stage_record["target_class_score"] = probability[
+                                gt_labels[gt_index]]
+                        stages.append(stage_record)
+
                     if image_layer_logits is not None and image_layer_boxes is not None:
                         for layer_index in range(image_layer_logits.shape[0]):
                             logits = image_layer_logits[layer_index, query_index]
                             layer_probability = logits.sigmoid()
                             score, label = layer_probability.max(dim=0)
-                            # Layer boxes are normalized; use the already known
-                            # final restored box only for the final layer and
-                            # restore other layers with the target metadata.
-                            normalized = image_layer_boxes[layer_index, query_index]
-                            layer_box = _restore_target_boxes({
-                                **target, "boxes": normalized[None]
-                            })[0]
+                            layer_box = restore_box(
+                                image_layer_boxes[layer_index, query_index])
                             layer_record = {
-                                "layer": layer_index, "box": layer_box,
+                                "stage": "decoder_layer",
+                                "stage_index": layer_index,
+                                "display_name": f"Decoder {layer_index}",
+                                "box": layer_box,
                                 "top_score": score, "top_label": int(label),
                             }
-                            if image_layer_refs is not None:
-                                normalized_reference = image_layer_refs[
-                                    layer_index, query_index]
-                                reference_box = _restore_target_boxes({
-                                    **target, "boxes": normalized_reference[None]
-                                })[0]
-                                layer_record["reference_box"] = reference_box
+                            if image_layer_input_refs is not None:
+                                input_box = restore_box(image_layer_input_refs[
+                                    layer_index, query_index])
+                                layer_record["input_reference_box"] = input_box
                                 if gt_index is not None:
-                                    layer_record["reference_geometry"] = _box_errors(
-                                        reference_box, gt_boxes[gt_index])
+                                    layer_record["input_reference_geometry"] = _box_errors(
+                                        input_box, gt_boxes[gt_index])
+                            if image_layer_anchors is not None:
+                                anchor_box = restore_box(image_layer_anchors[
+                                    layer_index, query_index])
+                                layer_record["initial_anchor_box"] = anchor_box
+                                if gt_index is not None:
+                                    layer_record["initial_anchor_geometry"] = _box_errors(
+                                        anchor_box, gt_boxes[gt_index])
                             if gt_index is not None:
                                 layer_record.update(_box_errors(layer_box, gt_boxes[gt_index]))
                                 layer_record["target_class_score"] = layer_probability[gt_labels[gt_index]]
+                            if image_layer_raw_logits is not None and \
+                                    image_layer_lqe_delta is not None:
+                                raw_logits = image_layer_raw_logits[
+                                    layer_index, query_index]
+                                raw_probability = raw_logits.sigmoid()
+                                raw_score, raw_label = raw_probability.max(dim=0)
+                                lqe_delta = image_layer_lqe_delta[
+                                    layer_index, query_index]
+                                lqe_record = {
+                                    "top_score_before": raw_score,
+                                    "top_label_before": int(raw_label),
+                                    "top_score_after": score,
+                                    "top_label_after": int(label),
+                                    "top_class_logit_delta": lqe_delta[label],
+                                }
+                                if gt_index is not None:
+                                    target_label = gt_labels[gt_index]
+                                    lqe_record.update({
+                                        "target_score_before": raw_probability[target_label],
+                                        "target_score_after": layer_probability[target_label],
+                                        "target_class_logit_delta": lqe_delta[target_label],
+                                    })
+                                layer_record["location_quality_estimator"] = lqe_record
                             if image_layer_distributions is not None and distribution_project is not None:
                                 distribution_logits = image_layer_distributions[
                                     layer_index, query_index]
@@ -877,6 +980,11 @@ class OBBDiagnostics:
                                         component_records[name] = {
                                             "logits": distribution_logits[component_index],
                                             "probabilities": probability_values,
+                                            # This is the paper's weighted
+                                            # distribution A(n)P(n).  The LQE
+                                            # MLP above is a separate mechanism.
+                                            "weighted_values": (
+                                                probability_values * distribution_project),
                                             "entropy": -torch.sum(
                                                 probability_values *
                                                 probability_values.clamp_min(1e-12).log()),
@@ -888,6 +996,18 @@ class OBBDiagnostics:
                                                 (distribution_project - expectation).square()),
                                         }
                                     layer_record["fine_grained_distributions"] = component_records
+                            if image_layer_adr_residuals is not None:
+                                layer_record["adr_geometry"] = {
+                                    "residuals": image_layer_adr_residuals[
+                                        layer_index, query_index],
+                                    "raw_six_values_normalized": (
+                                        image_layer_adr_values[layer_index, query_index]
+                                        if image_layer_adr_values is not None else None),
+                                    "raw_orthogonality_error": (
+                                        image_layer_adr_orthogonality[
+                                            layer_index, query_index]
+                                        if image_layer_adr_orthogonality is not None else None),
+                                }
                             if image_sampling_locations is not None:
                                 layer_record["rotated_cross_attention"] = {
                                     "unrotated_offsets": image_sampling_unrotated[
@@ -899,12 +1019,28 @@ class OBBDiagnostics:
                                     "attention_weights": image_sampling_weights[
                                         layer_index, query_index],
                                 }
-                            layers.append(layer_record)
+                            if gt_index is not None and stages:
+                                previous = stages[-1]
+                                layer_record["transition_from_previous"] = {
+                                    "rotated_iou_delta": (
+                                        layer_record.get("rotated_iou", 0.0) -
+                                        previous.get("rotated_iou", 0.0)),
+                                    "center_error_px_delta": (
+                                        layer_record.get("center_error_px", 0.0) -
+                                        previous.get("center_error_px", 0.0)),
+                                    "angle_error_deg_delta": (
+                                        layer_record.get("angle_error_deg", 0.0) -
+                                        previous.get("angle_error_deg", 0.0)),
+                                }
+                            stages.append(layer_record)
                     self._emit("queries", {
                         "schema_version": SCHEMA_VERSION, "rank": self.rank,
                         "epoch": self._eval_epoch, "image_id": image_id,
                         "image_name": image_name, "query_index": query_index,
+                        "image_path": image_path,
+                        "original_size": target.get("orig_size"),
                         "matched_gt_index": gt_index,
+                        "gt_box": gt_boxes[gt_index] if gt_index is not None else None,
                         "selected_reason": "hungarian" if gt_index is not None else "top_score",
                         "distribution_kind": (
                             refinement_kind.upper() if refinement_kind is not None
@@ -912,13 +1048,14 @@ class OBBDiagnostics:
                         "refinement_mode": refinement_mode,
                         "distribution_codebook": distribution_project,
                         "sampling_points_per_level": sampling_points_per_level,
-                        "layers": layers,
+                        "stage_sequence": [stage["display_name"] for stage in stages],
+                        "stages": stages,
                         **(gt_identity[gt_index] if gt_index is not None else partition_context),
                     })
                 self._detailed_seen += 1
         self._eval_batch_index += 1
 
-    def finish_evaluation(self, evaluator=None):
+    def finish_evaluation(self, evaluator=None, refinement_stages=None):
         if not self.enabled or self._eval_dir is None:
             return
         local_summary = {
@@ -935,6 +1072,12 @@ class OBBDiagnostics:
                 "stats": getattr(evaluator, "stats", []),
                 "merge_summary": getattr(evaluator, "merge_summary", {}),
             })
+            if refinement_stages is not None:
+                _write_json(self._eval_dir / "refinement_stages.json", {
+                    "schema_version": SCHEMA_VERSION,
+                    "epoch": self._eval_epoch,
+                    **refinement_stages,
+                })
         self._close_eval_writers()
 
     def record_global_merge(self, evaluator):
