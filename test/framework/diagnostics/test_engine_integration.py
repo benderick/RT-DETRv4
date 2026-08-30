@@ -49,6 +49,14 @@ class _ToyDetector(nn.Module):
         output = {
             "pred_logits": self.logits.sigmoid().logit().unsqueeze(0).expand(batch, -1, -1),
             "pred_boxes": self.box_parameters.sigmoid().unsqueeze(0).expand(batch, -1, -1),
+            "method_train_diagnostics": {
+                "schema_version": "toy-method-v1",
+                "method_id": "toy",
+                "layers": [{
+                    "layer_index": 0,
+                    "residual_l2_mean": self.logits.detach().abs().mean(),
+                }],
+            },
         }
         if self.decoder.decoder.diagnostic_mode:
             pre_boxes = output["pred_boxes"].clone()
@@ -62,6 +70,12 @@ class _ToyDetector(nn.Module):
                     output["pred_logits"] - .1, output["pred_logits"])),
                 "diagnostic_layer_boxes": torch.stack((
                     layer0_boxes, output["pred_boxes"])),
+                "diagnostic_query_extensions": {
+                    "schema_version": "toy-method-v1",
+                    "moment_names": ("x", "y"),
+                    "head_moments": torch.zeros(2, batch, 2, 2, 2),
+                    "residual_norm": torch.ones(2, batch, 2),
+                },
             })
         return output
 
@@ -110,6 +124,10 @@ class DiagnosticEngineIntegrationTest(unittest.TestCase):
                 self.decoder.dec_score_head = nn.Linear(2, 1)
                 self.decoder.decoder = nn.Module()
                 self.decoder.decoder.lqe_layers = nn.Linear(2, 1)
+                self.measure_adapter = nn.Linear(2, 1)
+                self.diagnostic_gradient_groups = {
+                    "research_adapter": "measure_adapter.",
+                }
 
             def forward(self, value):
                 modules = (
@@ -119,6 +137,7 @@ class DiagnosticEngineIntegrationTest(unittest.TestCase):
                     self.decoder.dec_angle_head,
                     self.decoder.dec_score_head,
                     self.decoder.decoder.lqe_layers,
+                    self.measure_adapter,
                 )
                 return sum(module(value).sum() for module in modules)
 
@@ -129,6 +148,7 @@ class DiagnosticEngineIntegrationTest(unittest.TestCase):
             "encoder_box_head", "pre_box_head", "box_refinement_heads",
             "angle_refinement_heads", "classification_heads",
             "location_quality_heads",
+            "research_adapter",
         })
         self.assertTrue(all(
             record["l2_norm"] > 0 and record["nonfinite_count"] == 0
@@ -213,6 +233,12 @@ class DiagnosticEngineIntegrationTest(unittest.TestCase):
             self.assertFalse(train_record["amp"]["optimizer_step_skipped"])
             self.assertIn("forward", train_record["timing_ms"])
             self.assertIn("main_hungarian_matches", train_record)
+            self.assertEqual(
+                train_record["method_diagnostics"]["schema_version"],
+                "toy-method-v1")
+            self.assertEqual(
+                train_record["method_diagnostics"]["layers"][0]["layer_index"],
+                0)
             self.assertEqual(train_record["targets"]["minor_side"]["count"], 1)
             self.assertEqual(train_record["targets"]["area_normalized"]["count"], 1)
             self.assertEqual(train_record["targets"]["aspect_ratio"]["count"], 1)
@@ -228,6 +254,20 @@ class DiagnosticEngineIntegrationTest(unittest.TestCase):
                 "score_threshold", "topk_truncation", "rotated_nms",
                 "max_detections", "final_assignment",
             })
+            with gzip.open(next(eval_dir.glob("queries.rank*.jsonl.gz")), "rt") as handle:
+                query_record = json.loads(handle.readline())
+            method_records = [
+                stage.get("method_diagnostics")
+                for stage in query_record["stages"]
+                if stage.get("stage") == "decoder_layer"
+            ]
+            self.assertTrue(method_records)
+            self.assertTrue(all(
+                record["schema_version"] == "toy-method-v1"
+                and record["moment_names"] == ["x", "y"]
+                and len(record["head_moments"]) == 2
+                for record in method_records
+            ))
             with (eval_dir / "metrics.json").open(encoding="utf-8") as handle:
                 metrics = json.load(handle)
             self.assertIn("AP50_DOTA07", metrics["metrics"])

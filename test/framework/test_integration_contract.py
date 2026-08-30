@@ -1,3 +1,4 @@
+import json
 import unittest
 from pathlib import Path
 
@@ -81,17 +82,37 @@ class FrameworkContractTest(unittest.TestCase):
 
     def test_integration_contract_and_canonical_packages_exist(self):
         self.assertTrue((ROOT / "docs/framework/INTEGRATION_CONTRACT.md").is_file())
+        self.assertTrue((ROOT / "docs/framework/WORKTREE_CONTRACT.md").is_file())
         self.assertTrue((ROOT / "docs/research/o2/implementation_audit.md").is_file())
+        self.assertTrue((ROOT / "docs/research/IDEA_LIFECYCLE.md").is_file())
+        self.assertTrue((ROOT / "docs/research/EXPERIENCE_LOG.md").is_file())
+        registry = json.loads(
+            (ROOT / "docs/research/registry.json").read_text(encoding="utf-8"))
+        active = {
+            idea["id"] for idea in registry["ideas"]
+            if idea["status"] != "retired"
+        }
+        for manifest_path in (ROOT / "docs/research").glob("*/manifest.json"):
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                manifest["schema_version"], "research-idea-manifest-v1")
+            active.add(manifest["idea"]["id"])
         self.assertTrue((ROOT / "engine/rtv4/obb/methods/o2/adr.py").is_file())
         self.assertFalse((ROOT / "configs/research").exists())
         self.assertEqual(
-            sorted(path.name for path in (ROOT / "docs/research").iterdir()),
-            ["o2"],
+            {path.name for path in (ROOT / "docs/research").iterdir()
+             if path.is_dir()},
+            {"o2", *active},
         )
         self.assertEqual(
-            sorted(path.name for path in (ROOT / "test/research").iterdir()
-                   if path.is_dir() and path.name != "__pycache__"),
-            ["o2"],
+            {path.name for path in (ROOT / "test/research").iterdir()
+             if path.is_dir() and path.name != "__pycache__"},
+            {"o2", *active},
+        )
+        self.assertEqual(
+            {path.name for path in (ROOT / "tools/research").iterdir()
+             if path.is_dir() and path.name != "__pycache__"},
+            {"o2", *active},
         )
         self.assertFalse((ROOT / "参考资料").exists())
 

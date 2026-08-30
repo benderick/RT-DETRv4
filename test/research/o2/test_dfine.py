@@ -42,6 +42,22 @@ def _tiny_o2_model(num_denoising=10):
     )
 
 
+def _assert_nested_exact(test, first, second):
+    test.assertEqual(type(first), type(second))
+    if torch.is_tensor(first):
+        torch.testing.assert_close(first, second, atol=0, rtol=0)
+    elif isinstance(first, dict):
+        test.assertEqual(first.keys(), second.keys())
+        for key in first:
+            _assert_nested_exact(test, first[key], second[key])
+    elif isinstance(first, (tuple, list)):
+        test.assertEqual(len(first), len(second))
+        for left, right in zip(first, second):
+            _assert_nested_exact(test, left, right)
+    else:
+        test.assertEqual(first, second)
+
+
 class O2ADRTest(unittest.TestCase):
     def test_paper_weighting_function_and_unbiased_bin_translation(self):
         project = o2_weighting_function(32, a=0.5, c=0.25)
@@ -191,6 +207,35 @@ class O2ADRTest(unittest.TestCase):
 
 
 class O2MatchingAndDenoisingTest(unittest.TestCase):
+    def test_default_denoising_strategy_seam_is_bit_exact_o2(self):
+        model = _tiny_o2_model()
+        targets = [
+            {"labels": torch.tensor([0, 2]), "boxes": torch.tensor([
+                [.50, .50, .20, .06, .01],
+                [.23, .31, .12, .05, .67],
+            ])},
+            {"labels": torch.tensor([1]), "boxes": torch.tensor([
+                [.71, .62, .18, .07, .24],
+            ])},
+        ]
+        arguments = dict(
+            targets=targets, num_classes=model.num_classes,
+            num_queries=model.num_queries,
+            class_embed=model.denoising_class_embed,
+            num_denoising=model.num_denoising,
+            label_noise_ratio=model.label_noise_ratio,
+            box_noise_scale=model.box_noise_scale, mode=model.ocd_mode,
+            lambda1=model.ocd_lambdas[0], lambda2=model.ocd_lambdas[1],
+            lambda3=model.ocd_lambdas[2], lambda4=model.ocd_lambdas[3],
+            lambda5=model.ocd_lambdas[4], lambda6=model.ocd_lambdas[5],
+            crowded_policy=model.ocd_crowded_policy,
+        )
+        torch.manual_seed(101)
+        expected = get_rotated_contrastive_denoising_training_group(**arguments)
+        torch.manual_seed(101)
+        observed = model._build_denoising_group(targets)
+        _assert_nested_exact(self, observed, expected)
+
     def test_chamfer_matches_the_released_o2_definition(self):
         first = torch.tensor([[0.5, 0.5, 0.2, 0.1, 0.0]])
         second = torch.tensor([[0.51, 0.5, 0.2, 0.1, 0.0]])

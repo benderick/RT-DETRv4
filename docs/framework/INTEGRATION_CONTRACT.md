@@ -35,23 +35,41 @@ engine/evaluation/                # 指标与原图/tile 合并评估
 engine/diagnostics/               # 方法无关的结构化日志
 engine/rtv4/                      # detector、matcher、criterion、postprocessor
 engine/rtv4/obb/methods/o2/       # O² 私有 ADR 原语
+engine/rtv4/obb/incubator/<idea>/ # 通过 Stage 0、尚未晋级的隔离 prototype
 
 configs/dataset/                  # 数据协议
 configs/base/                     # 方法间共享的内部模型/优化基座
 configs/dfine/                    # 稳定训练入口
 configs/experiments/<dataset>/    # 数据集与稳定模型的可运行绑定
+configs/incubator/<idea>/         # prototype 的唯一训练入口
 docs/framework/                   # 公共契约与坐标规范
 docs/datasets/<name>/             # 数据集说明
 docs/research/o2/                 # O² 复现资料与审计
+docs/research/<idea>/manifest.json # 活动 idea 的分支内真源
+docs/research/registry.json       # 已退役 idea 的中央记录
+docs/research/EXPERIENCE_LOG.md   # 清退后仍保留的经验卡
+docs/research/<idea>/             # 新 idea 的冻结命题、来源和证伪协议
 tools/inference/                  # 通用推理入口
 tools/analysis/                   # 只读日志分析与可视化
 tools/research/o2/                # O² 私有分析工具
+tools/research/<idea>/            # 新 idea 的冻结审计/实验工具
 test/framework/                   # 公共底座测试
 test/research/o2/                 # O² 私有测试
+test/research/<idea>/             # 新 idea 的纯函数、干预不变量和 smoke 测试
 ```
 
 方法私有公式不得塞入通用 evaluator、dataset adapter 或 postprocessor。可以复用的
 几何与评估能力不得以数据集名复制注册。
+
+尚未通过证伪阶段的新 idea 不得加入稳定 `refinement_mode`，也不得改变已有模型的
+默认 forward。它必须先在 `docs/research/<idea>/`、`tools/research/<idea>/`、
+`test/research/<idea>/` 三个同名目录形成闭环；
+多个 idea 并行时不能把协议、实现和结果混放在 O² 复现目录或项目根目录。
+idea 的状态、算力闸门与清退规则必须遵循 `docs/research/IDEA_LIFECYCLE.md`。未经
+candidate gate 不建立实验目录；被证伪的实现不得移动到 archive 继续留在源码树，必须
+在经验卡落盘后由 `tools/research/manage_ideas.py` 安全清退。
+多 idea 并行时的分支、worktree、公共文件修改和日志隔离遵循
+`docs/framework/WORKTREE_CONTRACT.md`。
 
 ## 3. OBB 坐标契约
 
@@ -149,6 +167,10 @@ refinement_mode / world_size / device / dtype
 训练记录至少包括 loss 分项、匹配、中心/尺度/角度/rIoU、分布统计、梯度、AMP scale
 与 skipped step、数据等待时间、step time 和 peak memory。推理记录至少包括预处理、
 backbone、encoder、decoder、postprocess/NMS 时间以及峰值显存。
+
+隔离 prototype 若需要单列新参数的梯度，只能在模型上声明
+`diagnostic_gradient_groups: {日志名: 参数名片段}`；通用训练引擎按该声明聚合，不能把
+idea 私有模块名或公式硬编码进 `det_engine.py`。
 
 逐层 query 记录必须从 `pre_box` 开始，并区分：
 

@@ -20,6 +20,7 @@ from torch.cuda.amp.grad_scaler import GradScaler
 from ..optim import ModelEMA, Warmup
 from ..data import CocoEvaluator
 from ..misc import MetricLogger, SmoothedValue, dist_utils
+from ..rtv4.rotated_box_ops import angle_distance, rotated_iou
 
 
 def _refinement_stage_outputs(outputs):
@@ -153,6 +154,83 @@ def _box_geometry_observations(boxes):
 
 
 @torch.no_grad()
+def _denoising_recovery_observations(outputs, targets):
+    """Measure what every decoder stage recovers from its DN references."""
+
+    meta = outputs.get("dn_meta")
+    stages = []
+    if "dn_pre_outputs" in outputs:
+        stages.append(("pre_box", outputs["dn_pre_outputs"]))
+    stages.extend(
+        (f"decoder_{index}", stage)
+        for index, stage in enumerate(outputs.get("dn_outputs", [])))
+    if not meta or not stages:
+        return None
+    groups = int(meta["dn_num_group"])
+    total = int(meta["dn_num_split"][0])
+    if groups <= 0 or total % (2 * groups):
+        return {"error": "invalid denoising group layout"}
+    max_gt = total // (2 * groups)
+    target_indices = meta.get("dn_target_idx")
+    records = []
+    for stage_name, stage in stages:
+        positive_boxes, target_boxes = [], []
+        positive_target_scores, negative_target_scores = [], []
+        positive_max_scores, negative_max_scores = [], []
+        for batch_index, positive in enumerate(meta["dn_positive_idx"]):
+            positive = positive.to(stage["pred_boxes"].device)
+            if not len(positive):
+                continue
+            if target_indices is None:
+                target_index = torch.arange(
+                    len(targets[batch_index]["boxes"]), device=positive.device
+                ).tile(groups)
+            else:
+                target_index = target_indices[batch_index].to(positive.device)
+            negative = positive + max_gt
+            labels = targets[batch_index]["labels"][target_index]
+            logits = stage["pred_logits"][batch_index]
+            probabilities = logits.sigmoid()
+            positive_target_scores.append(probabilities[positive, labels])
+            negative_target_scores.append(probabilities[negative, labels])
+            positive_max_scores.append(probabilities[positive].amax(dim=-1))
+            negative_max_scores.append(probabilities[negative].amax(dim=-1))
+            positive_boxes.append(stage["pred_boxes"][batch_index, positive])
+            target_boxes.append(targets[batch_index]["boxes"][target_index])
+        if not positive_boxes:
+            continue
+        predicted = torch.cat(positive_boxes)
+        target = torch.cat(target_boxes)
+        target_diagonal = torch.linalg.vector_norm(
+            target[:, 2:4], dim=-1).clamp_min(1e-12)
+        records.append({
+            "stage": stage_name,
+            "matched_positive_count": len(predicted),
+            "positive_rotated_iou": _distribution(rotated_iou(
+                predicted, target, aligned=True, model_space=True)),
+            "positive_center_error_target_diagonal": _distribution(
+                torch.linalg.vector_norm(
+                    predicted[:, :2] - target[:, :2], dim=-1
+                ) / target_diagonal),
+            "positive_log_size_error": _distribution((
+                predicted[:, 2:4].clamp_min(1e-12).log()
+                - target[:, 2:4].clamp_min(1e-12).log()
+            ).abs().mean(dim=-1)),
+            "positive_angle_error_deg": _distribution(
+                angle_distance(predicted[:, 4], target[:, 4]) * 180.0),
+            "positive_target_class_score": _distribution(
+                torch.cat(positive_target_scores)),
+            "negative_target_class_score": _distribution(
+                torch.cat(negative_target_scores)),
+            "positive_max_class_score": _distribution(
+                torch.cat(positive_max_scores)),
+            "negative_max_class_score": _distribution(
+                torch.cat(negative_max_scores)),
+        })
+    return records
+
+
+@torch.no_grad()
 def _gradient_statistics(model):
     broad_accumulators = {}
     component_accumulators = {}
@@ -165,6 +243,19 @@ def _gradient_statistics(model):
         ("classification_heads", "decoder.dec_score_head."),
         ("location_quality_heads", "decoder.decoder.lqe_layers."),
     )
+    owner = getattr(model, "module", model)
+    method_component_markers = getattr(
+        owner, "diagnostic_gradient_groups", {})
+    if not isinstance(method_component_markers, dict) or not all(
+            isinstance(name, str) and isinstance(marker, str) and marker
+            for name, marker in method_component_markers.items()):
+        raise TypeError(
+            "diagnostic_gradient_groups must map names to non-empty parameter "
+            "name markers")
+    reserved_components = {name for name, _ in component_prefixes}
+    if reserved_components.intersection(method_component_markers):
+        raise ValueError(
+            "diagnostic_gradient_groups cannot replace stable component names")
 
     def accumulate(accumulators, group, grad):
         entry = accumulators.setdefault(group, {
@@ -201,6 +292,9 @@ def _gradient_statistics(model):
                           if clean_name.startswith(prefix)), None)
         if component is not None:
             accumulate(component_accumulators, component, grad)
+        for component, marker in method_component_markers.items():
+            if marker in clean_name:
+                accumulate(component_accumulators, component, grad)
 
     result = finalize(broad_accumulators)
     total_square = sum(
@@ -315,7 +409,12 @@ def _training_observations(samples, targets, outputs):
         "denoising_pre_box_geometry": _box_geometry_observations(
             outputs["dn_pre_outputs"]["pred_boxes"]
         ) if "dn_pre_outputs" in outputs else None,
+        "denoising_recovery": _denoising_recovery_observations(outputs, targets),
         "fine_grained_distributions": _fine_grained_distribution_observations(outputs),
+        # Optional research modules expose already-aggregated, detached
+        # observations through this generic extension point.  Stable models do
+        # not emit the key, so their forward and log schemas are unchanged.
+        "method_diagnostics": outputs.get("method_train_diagnostics"),
         "denoising": {
             "mode": denoising_meta.get("dn_noise_mode"),
             "lambdas": denoising_meta.get("dn_noise_lambdas"),

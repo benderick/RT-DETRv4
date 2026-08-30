@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the stable OBB framework and O²-specific tests."""
+"""Run stable OBB framework, O² reproduction, and active research tests."""
 
 import sys
 import unittest

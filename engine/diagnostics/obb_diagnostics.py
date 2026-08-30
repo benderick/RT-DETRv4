@@ -500,6 +500,7 @@ class OBBDiagnostics:
         sampling_rotated = outputs.get("diagnostic_sampling_rotated_offsets")
         sampling_weights = outputs.get("diagnostic_sampling_attention_weights")
         sampling_points_per_level = outputs.get("diagnostic_sampling_points_per_level")
+        query_extensions = outputs.get("diagnostic_query_extensions")
         if distribution_project is not None:
             distribution_project = distribution_project.detach().float().cpu().reshape(-1)
         for batch_index, (target, result, post) in enumerate(
@@ -862,6 +863,29 @@ class OBBDiagnostics:
                     if sampling_rotated is not None else None
                 image_sampling_weights = sampling_weights[:, batch_index].detach().float().cpu() \
                     if sampling_weights is not None else None
+                extension_schema = None
+                extension_metadata = {}
+                image_query_extensions = {}
+                if isinstance(query_extensions, dict):
+                    extension_schema = query_extensions.get("schema_version")
+                    for extension_name, extension_value in query_extensions.items():
+                        if extension_name == "schema_version":
+                            continue
+                        if torch.is_tensor(extension_value):
+                            expected_shape = (
+                                int(layer_boxes.shape[0]), len(targets),
+                                int(layer_boxes.shape[2]),
+                            ) if layer_boxes is not None else None
+                            if extension_value.ndim < 3 or expected_shape is None or \
+                                    tuple(extension_value.shape[:3]) != expected_shape:
+                                raise ValueError(
+                                    "diagnostic query extension tensors must have "
+                                    "the same [layer,batch,query,...] prefix as "
+                                    "diagnostic_layer_boxes")
+                            image_query_extensions[extension_name] = \
+                                extension_value[:, batch_index].detach().float().cpu()
+                        else:
+                            extension_metadata[extension_name] = extension_value
                 query_scores = probabilities.max(dim=1).values
                 top_query_count = min(self.query_topk, len(query_scores))
                 selected = set(torch.topk(query_scores, top_query_count).indices.tolist()) \
@@ -1018,6 +1042,15 @@ class OBBDiagnostics:
                                         layer_index, query_index],
                                     "attention_weights": image_sampling_weights[
                                         layer_index, query_index],
+                                }
+                            if image_query_extensions:
+                                layer_record["method_diagnostics"] = {
+                                    "schema_version": extension_schema,
+                                    **extension_metadata,
+                                    **{
+                                        name: value[layer_index, query_index]
+                                        for name, value in image_query_extensions.items()
+                                    },
                                 }
                             if gt_index is not None and stages:
                                 previous = stages[-1]

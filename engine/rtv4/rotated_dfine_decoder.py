@@ -145,6 +145,8 @@ class RotatedTransformerDecoder(TransformerDecoder):
 class RotatedDFINETransformer(DFINETransformer):
     """D-FINE OBB decoder supporting direct-angle and O² ADR refinement."""
 
+    __inject__ = ["denoising_builder"]
+
     def __init__(
         self, num_classes=80, hidden_dim=256, num_queries=300,
         feat_channels=(512, 1024, 2048), feat_strides=(8, 16, 32),
@@ -161,6 +163,7 @@ class RotatedDFINETransformer(DFINETransformer):
         ocd_lambda3=9.0, ocd_lambda4=18.0,
         ocd_lambda5=0.3, ocd_lambda6=0.6,
         ocd_crowded_policy="strict_budget_random",
+        denoising_builder=None,
     ):
         # Base initialization mutates feat_strides when extra levels are used;
         # keep configuration-owned lists immutable across repeated test builds.
@@ -189,6 +192,9 @@ class RotatedDFINETransformer(DFINETransformer):
         self.use_adr = refinement_mode == "o2_adr"
         self.ocd_mode = str(ocd_mode)
         self.ocd_crowded_policy = str(ocd_crowded_policy)
+        if denoising_builder is not None and not callable(denoising_builder):
+            raise TypeError("denoising_builder must be callable or None")
+        self.denoising_builder = denoising_builder
         self.ocd_lambdas = (
             float(ocd_lambda1), float(ocd_lambda2), float(ocd_lambda3),
             float(ocd_lambda4), float(ocd_lambda5), float(ocd_lambda6),
@@ -297,18 +303,42 @@ class RotatedDFINETransformer(DFINETransformer):
             adr_project=self.adr_project if self.use_adr else None,
         )
 
+    def _build_denoising_group(self, targets):
+        """Build training-only DN queries through one explicit strategy seam.
+
+        The default path is the established O²/direct-angle implementation.
+        Incubator methods may inject a callable without adding a refinement
+        mode, changing detector parameters, or duplicating decoder forward.
+        """
+
+        arguments = dict(
+            targets=targets,
+            num_classes=self.num_classes,
+            num_queries=self.num_queries,
+            class_embed=self.denoising_class_embed,
+            num_denoising=self.num_denoising,
+            label_noise_ratio=self.label_noise_ratio,
+            box_noise_scale=self.box_noise_scale,
+            mode=self.ocd_mode,
+            lambda1=self.ocd_lambdas[0],
+            lambda2=self.ocd_lambdas[1],
+            lambda3=self.ocd_lambdas[2],
+            lambda4=self.ocd_lambdas[3],
+            lambda5=self.ocd_lambdas[4],
+            lambda6=self.ocd_lambdas[5],
+            crowded_policy=self.ocd_crowded_policy,
+        )
+        builder = self.denoising_builder
+        return (
+            get_rotated_contrastive_denoising_training_group(**arguments)
+            if builder is None else builder(**arguments)
+        )
+
     def forward(self, feats, targets=None):
         memory, spatial_shapes = self._get_encoder_input(feats)
         if self.training and self.num_denoising > 0:
             dn_logits, dn_boxes, attention_mask, dn_meta = \
-                get_rotated_contrastive_denoising_training_group(
-                    targets, self.num_classes, self.num_queries, self.denoising_class_embed,
-                    self.num_denoising, self.label_noise_ratio, self.box_noise_scale,
-                    mode=self.ocd_mode,
-                    lambda1=self.ocd_lambdas[0], lambda2=self.ocd_lambdas[1],
-                    lambda3=self.ocd_lambdas[2], lambda4=self.ocd_lambdas[3],
-                    lambda5=self.ocd_lambdas[4], lambda6=self.ocd_lambdas[5],
-                    crowded_policy=self.ocd_crowded_policy)
+                self._build_denoising_group(targets)
         else:
             dn_logits = dn_boxes = attention_mask = dn_meta = None
         content, refs, enc_boxes, enc_logits = self._get_decoder_input(
@@ -423,4 +453,7 @@ class RotatedDFINETransformer(DFINETransformer):
                     dn_out_corners[-1], dn_out_logits[-1])
                 result["dn_pre_outputs"] = {"pred_logits": dn_pre_logits, "pred_boxes": dn_pre_boxes}
                 result["dn_meta"] = dn_meta
+                if "method_diagnostics" in dn_meta:
+                    result["method_train_diagnostics"] = \
+                        dn_meta["method_diagnostics"]
         return result
