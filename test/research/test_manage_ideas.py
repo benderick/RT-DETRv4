@@ -46,6 +46,7 @@ class ResearchIdeaLifecycleTest(unittest.TestCase):
                 "status": "rejected",
                 "claim": "demo",
                 "verdict": "NOT_SUPPORTED",
+                "verdict_scope": "scientific_claim",
                 "experience_entry": "EXP-DEMO",
                 "owned_paths": [
                     "docs/ideas/demo",
@@ -84,6 +85,7 @@ class ResearchIdeaLifecycleTest(unittest.TestCase):
         value = json.loads(
             (self.ledger / "registry.json").read_text())
         self.assertEqual(value["ideas"][0]["status"], "retired")
+        self.assertEqual(value["ideas"][0]["retired_from"], "rejected")
         self.assertEqual(value["ideas"][0]["retired_on"], "2026-08-26")
         backup = json.loads((self.ledger / "registry.json.bak").read_text())
         self.assertEqual(backup["ideas"][0]["status"], "rejected")
@@ -99,6 +101,11 @@ class ResearchIdeaLifecycleTest(unittest.TestCase):
         (self.ledger / "EXPERIENCE_LOG.md").write_text("# empty\n")
         with self.assertRaisesRegex(RegistryError, "experience card"):
             validate_registry(self.root)
+
+    def test_decision_requires_explicit_verdict_scope(self):
+        self.registry["ideas"][0].pop("verdict_scope")
+        with self.assertRaisesRegex(RegistryError, "verdict_scope"):
+            validate_registry(self.root, self.registry)
 
     def test_owned_path_escape_and_reserved_id_are_rejected(self):
         self.registry["ideas"][0]["owned_paths"] = ["docs/ideas/other"]
@@ -119,6 +126,7 @@ class ResearchIdeaLifecycleTest(unittest.TestCase):
             "status": "rejected",
             "claim": "fresh",
             "verdict": "NOT_SUPPORTED",
+            "verdict_scope": "scientific_claim",
             "experience_entry": "EXP-FRESH",
             "base_tag": "obb-o2-baseline-v1",
             "base_commit": "0" * 40,
@@ -153,8 +161,59 @@ class ResearchIdeaLifecycleTest(unittest.TestCase):
         archived_idea = next(
             item for item in archived["ideas"] if item["id"] == idea_id)
         self.assertEqual(archived_idea["status"], "retired")
+        self.assertEqual(archived_idea["retired_from"], "rejected")
         self.assertEqual(archived_idea["retired_on"], "2026-08-30")
         validate_registry(self.root)
+
+    def test_inconclusive_can_retire_without_becoming_claim_rejection(self):
+        idea = self.registry["ideas"][0]
+        idea["status"] = "inconclusive"
+        idea["verdict"] = "PROBE_NOT_FAITHFUL"
+        idea["verdict_scope"] = "probe"
+        (self.ledger / "registry.json").write_text(json.dumps(self.registry))
+
+        plan = retirement_plan(self.root, "demo")
+        self.assertEqual(plan["status_before"], "inconclusive")
+        apply_retirement(self.root, "demo", retired_on="2026-08-30")
+        archived = json.loads(
+            (self.ledger / "registry.json").read_text())["ideas"][0]
+        self.assertEqual(archived["status"], "retired")
+        self.assertEqual(archived["retired_from"], "inconclusive")
+        self.assertEqual(archived["verdict_scope"], "probe")
+
+    def test_parked_requires_resume_condition_and_cannot_retire(self):
+        idea = self.registry["ideas"][0]
+        idea["status"] = "parked"
+        idea["pause_reason"] = "external dependency unavailable"
+        idea["resume_condition"] = "dependency is released"
+        validate_registry(self.root, self.registry)
+        (self.ledger / "registry.json").write_text(json.dumps(self.registry))
+        with self.assertRaisesRegex(RegistryError, "before retirement"):
+            retirement_plan(self.root, "demo")
+
+        idea.pop("resume_condition")
+        with self.assertRaisesRegex(RegistryError, "resume_condition"):
+            validate_registry(self.root, self.registry)
+
+    def test_candidate_may_only_own_its_documentation(self):
+        idea = self.registry["ideas"][0]
+        idea["status"] = "candidate"
+        idea["owned_paths"] = ["docs/ideas/demo"]
+        validate_registry(self.root, self.registry)
+        idea["owned_paths"].append("tools/research/demo")
+        with self.assertRaisesRegex(RegistryError, "only own"):
+            validate_registry(self.root, self.registry)
+
+    def test_removed_stage0_status_is_rejected(self):
+        self.registry["ideas"][0]["status"] = "stage0"
+        with self.assertRaisesRegex(RegistryError, "Unknown status"):
+            validate_registry(self.root, self.registry)
+
+    def test_learning_dependent_lifecycle_statuses_are_supported(self):
+        for status in ("feasibility", "pilot", "prototype", "promoted"):
+            with self.subTest(status=status):
+                self.registry["ideas"][0]["status"] = status
+                validate_registry(self.root, self.registry)
 
     def test_linked_baseline_is_visible_but_never_disposable(self):
         with tempfile.TemporaryDirectory() as external_name:

@@ -28,9 +28,11 @@ from typing import Iterable
 SCHEMA_VERSION = "research-idea-registry-v1"
 MANIFEST_SCHEMA_VERSION = "research-idea-manifest-v1"
 VALID_STATUSES = {
-    "candidate", "stage0", "prototype", "promoted", "rejected", "retired",
+    "candidate", "feasibility", "pilot", "prototype", "promoted",
+    "parked", "inconclusive", "rejected", "retired",
 }
-RETIRABLE_STATUS = "rejected"
+RETIRABLE_STATUSES = frozenset({"inconclusive", "rejected"})
+DECISION_STATUSES = RETIRABLE_STATUSES
 SOURCE_ROOTS = (
     Path("docs/ideas"),
     Path("tools/research"),
@@ -378,6 +380,10 @@ def validate_registry(root: Path, registry: dict | None = None) -> dict[str, dic
         paths = idea.get("owned_paths", [])
         if not isinstance(paths, list) or len(paths) != len(set(map(str, paths))):
             raise RegistryError(f"owned_paths for {idea_id} must be a unique list")
+        if status == "candidate" and set(map(str, paths)) != {
+                f"docs/ideas/{idea_id}"}:
+            raise RegistryError(
+                f"Candidate idea {idea_id} may only own its documentation directory")
         resolved_paths = [_source_path(root, idea_id, raw) for raw in paths]
         if status == "retired":
             leftovers = [str(path) for path in resolved_paths if path.exists()]
@@ -400,13 +406,20 @@ def validate_registry(root: Path, registry: dict | None = None) -> dict[str, dic
                     # linked evidence.  Every deletion plan resolves the same
                     # path again with the strict default before mutating it.
                     allow_read_only_external=True)
-        if status in {"rejected", "retired"}:
+        if status in DECISION_STATUSES or status == "retired":
             entry = idea.get("experience_entry")
             if not isinstance(entry, str) or f"## {entry}：" not in experience_text:
                 raise RegistryError(
-                    f"Rejected/retired idea {idea_id} lacks a durable experience card")
+                    f"Decided/retired idea {idea_id} lacks a durable experience card")
             if not idea.get("verdict"):
-                raise RegistryError(f"Rejected/retired idea {idea_id} lacks a verdict")
+                raise RegistryError(f"Decided/retired idea {idea_id} lacks a verdict")
+        if status in DECISION_STATUSES and not idea.get("verdict_scope"):
+            raise RegistryError(
+                f"Decided idea {idea_id} lacks a verdict_scope")
+        if status == "parked":
+            if not idea.get("pause_reason") or not idea.get("resume_condition"):
+                raise RegistryError(
+                    f"Parked idea {idea_id} requires pause_reason and resume_condition")
     return ideas
 
 
@@ -434,10 +447,11 @@ def retirement_plan(
     if idea_id not in ideas:
         raise RegistryError(f"Unknown research idea: {idea_id}")
     idea = ideas[idea_id]
-    if idea.get("status") != RETIRABLE_STATUS:
+    status_before = idea.get("status")
+    if status_before not in RETIRABLE_STATUSES:
         raise RegistryError(
-            f"Idea {idea_id} must be {RETIRABLE_STATUS!r} before retirement; "
-            f"got {idea.get('status')!r}")
+            f"Idea {idea_id} must be one of {sorted(RETIRABLE_STATUSES)} "
+            f"before retirement; got {status_before!r}")
 
     source_paths = [_source_path(root, idea_id, raw)
                     for raw in idea.get("owned_paths", [])]
@@ -448,7 +462,7 @@ def retirement_plan(
         _assert_no_symlink(path, root)
     return {
         "idea_id": idea_id,
-        "status_before": RETIRABLE_STATUS,
+        "status_before": status_before,
         "status_after": "retired",
         "ledger_root": str(research_ledger_root(root)),
         "ledger_registry": str(registry_path(root)),
@@ -604,6 +618,7 @@ def apply_retirement(
                 shutil.rmtree(path)
             elif path.exists():
                 path.unlink()
+        idea["retired_from"] = plan["status_before"]
         idea["status"] = "retired"
         idea["retired_on"] = retired_on or dt.date.today().isoformat()
         archived = _idea_map(registry)

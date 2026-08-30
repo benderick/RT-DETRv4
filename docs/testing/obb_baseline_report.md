@@ -25,7 +25,7 @@
 
 ## 当前结果
 
-2026-08-30 完整入口实测：**139 tests run，136 passed，3 skipped，0 failures**。
+2026-08-30 完整入口实测：**145 tests run，142 passed，3 skipped，0 failures**。
 三个 skip 分别是
 CODrone 原图、CODrone tile 和 UAV-ROD 的 O² 1024 CUDA smoke；当前会话无法初始化
 CUDA/NVML。随后用户 GPU 环境已经用相同代码完成 UAV-ROD 1024、AMP、72 轮从零

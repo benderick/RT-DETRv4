@@ -4,8 +4,9 @@
 `docs/ideas/<idea_id>/`，至少包含命题卡和 `manifest.json`；进入清退阶段时再添加
 `experience.md`。
 
-`candidate` 阶段只允许上述文档目录。通过 candidate gate、进入 Stage 0 后，才创建
-审计工具和对应测试；需要训练的 `prototype` 才创建模型与配置目录。
+`candidate` 阶段只允许上述文档目录。进入 `feasibility` 后，按首个忠实实验的实际
+需要创建审计工具、测试、隔离模型和配置；冻结审计不是强制步骤，训练也不必等到
+`prototype`。
 
 这些阶段可能使用的隔离路径分别为：
 

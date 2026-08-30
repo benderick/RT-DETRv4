@@ -182,7 +182,7 @@ CUDA_VISIBLE_DEVICES=0 \
 ## 并行研究 idea
 
 `main` 只维护稳定框架。每个新命题使用独立的 `idea/<idea_id>` 分支和同名 worktree，
-候选、Stage 0、prototype、晋级和清退均遵守
+candidate、feasibility、pilot、prototype、晋级和清退均遵守
 [idea 生命周期](docs/development/IDEA_LIFECYCLE.md)与
 [worktree 契约/入门手册](docs/development/WORKTREE_CONTRACT.md)。常用管理命令：
 

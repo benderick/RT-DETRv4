@@ -35,24 +35,24 @@ engine/evaluation/                # 指标与原图/tile 合并评估
 engine/diagnostics/               # 方法无关的结构化日志
 engine/rtv4/                      # detector、matcher、criterion、postprocessor
 engine/rtv4/obb/methods/o2/       # O² 私有 ADR 原语
-engine/rtv4/obb/incubator/<idea>/ # 通过 Stage 0、尚未晋级的隔离 prototype
+engine/rtv4/obb/incubator/<idea>/ # feasibility/pilot/prototype 的隔离实现
 
 configs/dataset/                  # 数据协议
 configs/base/                     # 方法间共享的内部模型/优化基座
 configs/dfine/                    # 稳定训练入口
 configs/experiments/<dataset>/    # 数据集与稳定模型的可运行绑定
-configs/incubator/<idea>/         # prototype 的唯一训练入口
+configs/incubator/<idea>/         # 未晋级 idea 的隔离训练入口
 docs/framework/                   # 公共契约与坐标规范
 docs/datasets/<name>/             # 数据集说明
 docs/methods/o2/                  # 稳定 O² 复现资料与审计
 docs/ideas/<idea>/manifest.json   # 活动 idea 的分支内真源
-docs/ideas/<idea>/                # 新 idea 的冻结命题、来源和证伪协议
+docs/ideas/<idea>/                # 新 idea 的版本化命题、来源和证据协议
 research/ledger/                  # Git 忽略的本地退役表与经验总账
 research/references/              # Git 忽略的论文源码与外部参考
 tools/inference/                  # 通用推理入口
 tools/analysis/                   # 只读日志分析与可视化
 tools/research/o2/                # O² 私有分析工具
-tools/research/<idea>/            # 新 idea 的冻结审计/实验工具
+tools/research/<idea>/            # 新 idea 的审计、学习 probe 和实验工具
 test/framework/                   # 公共底座测试
 test/research/o2/                 # O² 私有测试
 test/research/<idea>/             # 新 idea 的纯函数、干预不变量和 smoke 测试
@@ -62,13 +62,14 @@ test/research/<idea>/             # 新 idea 的纯函数、干预不变量和 s
 几何与评估能力不得以数据集名复制注册。
 
 尚未通过证伪阶段的新 idea 不得加入稳定 `refinement_mode`，也不得改变已有模型的
-默认 forward。`candidate` 只在 `docs/ideas/<idea>/` 保存命题卡和 manifest；通过
-candidate gate、进入 Stage 0 后，才在 `tools/research/<idea>/` 与
-`test/research/<idea>/` 建立同名的审计/测试闭环；
+默认 forward。`candidate` 只在 `docs/ideas/<idea>/` 保存命题卡和 manifest；进入
+`feasibility` 后，才按忠实实验的需要在 `tools/research/<idea>/`、
+`test/research/<idea>/`、`engine/rtv4/obb/incubator/<idea>/` 与
+`configs/incubator/<idea>/` 建立隔离闭环；feasibility 可以训练，且不要求制造空目录；
 多个 idea 并行时不能把协议、实现和结果混放在 O² 复现目录或项目根目录。
-idea 的状态、算力闸门与清退规则必须遵循 `docs/development/IDEA_LIFECYCLE.md`。未经
-candidate gate 不建立实验目录；被证伪的实现不得移动到 archive 继续留在源码树，必须
-在经验卡落入 `research/ledger/` 后由 `tools/research/manage_ideas.py` 安全清退。
+idea 的状态、证据路径与清退规则必须遵循 `docs/development/IDEA_LIFECYCLE.md`。
+candidate 阶段不建立实验目录；证据不足时可以换用更忠实的 probe，决定清退后才将
+经验卡写入 `research/ledger/`，并由 `tools/research/manage_ideas.py` 安全退场。
 该本地账本由所有 worktree 共用且不进入 Git，因此失败 idea 不产生 `main` 提交；
 晋级方法的正式说明与实现仍必须进入版本管理。
 多 idea 并行时的分支、worktree、公共文件修改和日志隔离遵循

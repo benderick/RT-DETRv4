@@ -45,7 +45,7 @@
 |---|---|---|
 | 稳定主干 | `main` | 可以随时运行的 OBB 框架 |
 | 框架能力 | `framework/<name>` | 方法无关、默认零影响的通用能力 |
-| 研究 idea | `idea/<idea_id>` | 单一科学命题和它的证伪实验 |
+| 研究 idea | `idea/<idea_id>` | 单一科学命题及其探索、忠实验证和迭代实现 |
 | 组合实验 | `combo/<a>+<b>` | 只用于预注册的方法组合，不代替单项消融 |
 | 晋级整理 | `promote/<idea_id>` | 从 `main` 重新整理已通过的实现 |
 
@@ -55,15 +55,15 @@
 docs/ideas/<idea_id>/
 tools/research/<idea_id>/
 test/research/<idea_id>/
-engine/rtv4/obb/incubator/<idea_id>/   # 只有 prototype 允许
-configs/incubator/<idea_id>/           # 只有 prototype 允许
+engine/rtv4/obb/incubator/<idea_id>/   # feasibility 起按忠实实验需要创建
+configs/incubator/<idea_id>/           # feasibility 起的隔离训练入口
 logs/research/<idea_id>/               # 本地证据，不进 Git
 ```
 
 `docs/ideas/<idea_id>/manifest.json` 是该分支的活动 idea 真源，至少记录
 `id/status/base_tag/base_commit/branch/owned_paths`。中央退役记录和经验卡位于主
 worktree 被 Git 忽略的 `research/ledger/`；所有 worktree 由管理工具自动发现
-同一个账本，因此失败清退不会修改或产生 `main` 提交。
+同一个账本，因此清退不会修改或产生 `main` 提交。
 其中 `base_commit` 是 `base_tag` 解析到的精确科学/模型基线；分支可以额外继承
 不改变模型的管理工具提交，正式训练仍会另行记录实际 HEAD。
 
@@ -137,8 +137,8 @@ ln -s \
 worktree，以免多个训练互相覆盖。
 
 然后只创建命题卡和 manifest，其中 `base_tag/base_commit` 仍填写
-`obb-o2-baseline-v1` 及其解析提交；通过 candidate gate 后再添加实现目录。这样分支
-拥有最新 worktree/ledger 工具，但科学模型基线没有被悄悄移动。
+`obb-o2-baseline-v1` 及其解析提交；进入 feasibility 后按忠实实验需要添加实现目录。
+这样分支拥有最新 worktree/ledger 工具，但科学模型基线没有被悄悄移动。
 
 ## 6. 日常使用
 
@@ -165,7 +165,7 @@ git status --short
 ```bash
 git add docs/ideas/new_idea tools/research/new_idea test/research/new_idea
 git status --short
-git commit -m "research(new_idea): freeze Stage 0 protocol"
+git commit -m "research(new_idea): freeze feasibility protocol"
 ```
 
 查看所有 worktree：
@@ -182,11 +182,13 @@ git worktree list
 - 不把 idea A 直接 merge 进 idea B。需要联合时，从同一 baseline tag 创建
   `combo/a+b`，只 cherry-pick 两者已冻结的最小提交。
 
-## 8. idea 成功或失败后
+## 8. idea 晋级、暂停或清退
 
-### 失败
+### 科学主张被否定或当前证据不足
 
-1. 把 manifest 状态改为 `rejected`，填写 verdict 和 `experience_entry`。
+1. 科学主张或机会空间被忠实证据否定时改为 `rejected`；probe 不忠实、统计不足或
+   实现未激活时改为 `inconclusive`。两者都填写 `verdict`、`verdict_scope` 和
+   `experience_entry`，不能用一个笼统的 `STOP` 代替作用域。
 2. 在 `docs/ideas/<idea_id>/experience.md` 写一张以
    `## <experience_entry>：...` 开头的可复用经验卡，然后原子写入本地总账：
 
@@ -203,8 +205,9 @@ python tools/research/manage_ideas.py retire new_idea
 python tools/research/manage_ideas.py retire new_idea --apply
 ```
 
-`--apply` 只更新被忽略的本地 ledger，不修改 `main`；失败实现不 merge、不提交清退
-结果。若确需长期保留失败源码，可以另打 archive tag，否则直接删除分支。
+`--apply` 只更新被忽略的本地 ledger，不修改 `main`；未晋级实现不 merge、不提交清退
+结果。`parked` 不属于清退状态，必须先明确恢复条件；只有真正完成 scoped verdict 后
+才进入 `rejected` 或 `inconclusive`。
 
 5. 在主仓库确认目标路径后移除 worktree；因为其中通常包含被忽略的日志和清退产生的
    未提交删除，需要显式 `--force`：
