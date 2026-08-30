@@ -99,7 +99,13 @@ def _source_path(root: Path, idea_id: str, raw: object) -> Path:
     return resolved
 
 
-def _artifact_path(root: Path, idea_id: str, raw: object) -> Path:
+def _artifact_path(
+    root: Path,
+    idea_id: str,
+    raw: object,
+    *,
+    allow_read_only_external: bool = False,
+) -> Path:
     if not isinstance(raw, str):
         raise RegistryError(f"Artifact path for {idea_id} must be a string")
     relative = Path(raw)
@@ -109,9 +115,13 @@ def _artifact_path(root: Path, idea_id: str, raw: object) -> Path:
         raise RegistryError(f"Research artifact must be under logs/: {raw!r}")
     resolved_root = root.resolve()
     resolved = (root / relative).resolve(strict=False)
-    if not _inside(resolved, resolved_root / "logs"):
+    if not allow_read_only_external and not _inside(
+            resolved, resolved_root / "logs"):
         raise RegistryError(f"Artifact path escapes logs/: {raw!r}")
-    return resolved
+    # Preserved evidence is never deleted by this tool.  It may therefore be
+    # read through a deliberately linked stable-baseline directory in another
+    # worktree.  Disposable artifacts retain the strict resolved-path check.
+    return (root / relative).absolute() if allow_read_only_external else resolved
 
 
 def _assert_no_symlink(path: Path, stop: Path) -> None:
@@ -241,7 +251,9 @@ def validate_registry(root: Path, registry: dict | None = None) -> dict[str, dic
             if not isinstance(values, list) or len(values) != len(set(map(str, values))):
                 raise RegistryError(f"{key} for {idea_id} must be a unique list")
             for raw in values:
-                _artifact_path(root, idea_id, raw)
+                _artifact_path(
+                    root, idea_id, raw,
+                    allow_read_only_external=(key == "preserved_evidence"))
         if status in {"rejected", "retired"}:
             entry = idea.get("experience_entry")
             if not isinstance(entry, str) or f"## {entry}：" not in experience_text:
