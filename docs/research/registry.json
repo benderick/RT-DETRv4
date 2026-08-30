@@ -254,6 +254,35 @@
         "logs/uav_rod/dfine_obb_o2/visible_silent_stage0/counterfactual_records.jsonl.gz",
         "logs/uav_rod/dfine_obb_o2/visible_silent_stage0/baseline_state_tensors.pt"
       ]
+    },
+    {
+      "id": "orbit_dn",
+      "title": "Denoising on Orbits",
+      "status": "retired",
+      "claim": "A structured denoising corruption kernel should be equivariant to output symmetries and define contrastive queries by invariant task-risk shells rather than coordinate amplitude.",
+      "verdict": "STOP_PROTOTYPE_GATE_NOT_PASSED",
+      "experience_entry": "EXP-2026-012",
+      "created_on": "2026-08-30",
+      "decided_on": "2026-08-30",
+      "retired_on": "2026-08-30",
+      "owned_paths": [
+        "docs/research/orbit_dn",
+        "tools/research/orbit_dn",
+        "test/research/orbit_dn",
+        "engine/rtv4/obb/incubator/orbit_dn",
+        "configs/incubator/orbit_dn"
+      ],
+      "preserved_evidence": [
+        "logs/research/orbit_dn/uav_rod_stage0/protocol.json",
+        "logs/research/orbit_dn/uav_rod_stage0/report.json",
+        "logs/research/orbit_dn/uav_rod_stage0/report.md",
+        "logs/research/orbit_dn/uav_rod_stage0/figures",
+        "logs/research/orbit_dn/uav_rod_prototype_gate.json"
+      ],
+      "discard_artifacts_on_retire": [
+        "logs/research/orbit_dn/uav_rod_stage0/records.npz",
+        "logs/research/orbit_dn/uav_rod_prototype"
+      ]
     }
   ]
 }
