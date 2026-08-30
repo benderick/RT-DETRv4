@@ -83,20 +83,28 @@ forward，不得向通用 evaluator、dataset adapter 或 postprocessor 塞入�
 
 ## 5. 清退与证据保留
 
-idea 进入 `rejected` 后必须先在 `EXPERIENCE_LOG.md` 写经验卡，再运行：
+idea 进入 `rejected` 后，先在分支自己的
+`docs/research/<idea>/experience.md` 写经验卡，并原子追加到主 worktree 的本地账本：
 
 ```bash
+python tools/research/manage_ideas.py record-experience <idea>
 python tools/research/manage_ideas.py retire <idea>
 python tools/research/manage_ideas.py retire <idea> --apply
 ```
 
-第一条命令永远只是预演。第二条只删除 manifest 中声明、且名称严格等于
+`retire` 不带 `--apply` 永远只是预演；带 `--apply` 时只删除 manifest 中声明、且名称严格等于
 idea id 的隔离目录；`o2` 是保留 id，工具会拒绝操作。清退工具会把分支
-manifest 转成中央退役记录。清退后仍保留：
+manifest 转成主 worktree 内被 Git 忽略的本地退役记录。清退后仍保留：
 
-- `registry.json` 中的命题、verdict、证据路径和清退日期；
-- `EXPERIENCE_LOG.md` 中的人可读经验卡；
+- `logs/research_ledger/registry.json` 中的命题、verdict、证据路径和清退日期；
+- `logs/research_ledger/EXPERIENCE_LOG.md` 中的人可读经验卡；
 - `report.json`、协议和少量关键图等小型裁决证据。
+
+这两份账本不进入 Git，因此清退失败 idea 不需要修改或提交 `main`。管理工具使用共享
+文件锁串行化多个 worktree 的写入，再用临时文件和 `os.replace` 原子更新，并在覆盖前
+生成 `.bak`；`research_ledger` 是保留 id，
+任何 preserved/disposable artifact 都不得指向该目录。账本不会随 Git clone 或 push
+迁移，必须单独备份。
 
 逐对象记录、特征张量等大型证据不随源码自动删除。注册表可声明
 `discard_artifacts_on_retire`，但只有额外传入 `--prune-artifacts` 才会清除这些精确
@@ -111,15 +119,24 @@ python tools/research/manage_ideas.py prune-artifacts <idea> --apply
 ## 6. 分支 manifest 与中央退役表
 
 活动 idea 的机器可读真源是它自己分支中的
-`docs/research/<idea>/manifest.json`。`docs/research/registry.json` 只保存已退役
-记录，因此多个 worktree 不会同时争写一个中央 JSON。
+`docs/research/<idea>/manifest.json`。已退役记录的机器可读真源是主 worktree 的
+`logs/research_ledger/registry.json`；人可读经验位于同目录的
+`EXPERIENCE_LOG.md`。工具通过 `git worktree list` 自动找到检出 `main` 的 worktree，
+因此从任意 idea worktree 执行都会落到同一个本地账本。
 
-`manage_ideas.py` 会合并当前 worktree 可见的活动 manifest 和中央退役表，
+`manage_ideas.py` 会合并当前 worktree 可见的活动 manifest 和本地退役表，
 并拒绝重复 id、未登记目录、越界所有权、缺失经验卡以及退役后仍残留的源码。
 
 常用检查：
 
 ```bash
+python tools/research/manage_ideas.py init-ledger
+python tools/research/manage_ideas.py ledger-path
 python tools/research/manage_ideas.py list
 python tools/research/manage_ideas.py validate
 ```
+
+`init-ledger` 只用于新 clone 或首次采用本契约；若只存在 registry/experience 其中之一，
+工具会拒绝猜测和覆盖。必要时可在命令的 subcommand 前使用
+`--ledger-root /absolute/path/logs/research_ledger`，或设置任务专用环境变量
+`RTV4_RESEARCH_LEDGER`。

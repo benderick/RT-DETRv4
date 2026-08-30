@@ -46,9 +46,8 @@ docs/framework/                   # 公共契约与坐标规范
 docs/datasets/<name>/             # 数据集说明
 docs/research/o2/                 # O² 复现资料与审计
 docs/research/<idea>/manifest.json # 活动 idea 的分支内真源
-docs/research/registry.json       # 已退役 idea 的中央记录
-docs/research/EXPERIENCE_LOG.md   # 清退后仍保留的经验卡
 docs/research/<idea>/             # 新 idea 的冻结命题、来源和证伪协议
+logs/research_ledger/             # Git 忽略的本地退役表与经验总账
 tools/inference/                  # 通用推理入口
 tools/analysis/                   # 只读日志分析与可视化
 tools/research/o2/                # O² 私有分析工具
@@ -67,7 +66,9 @@ test/research/<idea>/             # 新 idea 的纯函数、干预不变量和 s
 多个 idea 并行时不能把协议、实现和结果混放在 O² 复现目录或项目根目录。
 idea 的状态、算力闸门与清退规则必须遵循 `docs/research/IDEA_LIFECYCLE.md`。未经
 candidate gate 不建立实验目录；被证伪的实现不得移动到 archive 继续留在源码树，必须
-在经验卡落盘后由 `tools/research/manage_ideas.py` 安全清退。
+在经验卡落入 `logs/research_ledger/` 后由 `tools/research/manage_ideas.py` 安全清退。
+该本地账本由所有 worktree 共用且不进入 Git，因此失败 idea 不产生 `main` 提交；
+晋级方法的正式说明与实现仍必须进入版本管理。
 多 idea 并行时的分支、worktree、公共文件修改和日志隔离遵循
 `docs/framework/WORKTREE_CONTRACT.md`。
 

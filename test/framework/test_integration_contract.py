@@ -5,6 +5,7 @@ from pathlib import Path
 from engine.core import GLOBAL_CONFIG, YAMLConfig
 from engine.rtv4 import RotatedDFINETransformer
 from engine.rtv4.obb.methods.o2.adr import o2_weighting_function
+from tools.research.manage_ideas import LEDGER_RELATIVE
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -85,13 +86,10 @@ class FrameworkContractTest(unittest.TestCase):
         self.assertTrue((ROOT / "docs/framework/WORKTREE_CONTRACT.md").is_file())
         self.assertTrue((ROOT / "docs/research/o2/implementation_audit.md").is_file())
         self.assertTrue((ROOT / "docs/research/IDEA_LIFECYCLE.md").is_file())
-        self.assertTrue((ROOT / "docs/research/EXPERIENCE_LOG.md").is_file())
-        registry = json.loads(
-            (ROOT / "docs/research/registry.json").read_text(encoding="utf-8"))
-        active = {
-            idea["id"] for idea in registry["ideas"]
-            if idea["status"] != "retired"
-        }
+        self.assertEqual(LEDGER_RELATIVE, Path("logs/research_ledger"))
+        self.assertFalse((ROOT / "docs/research/EXPERIENCE_LOG.md").exists())
+        self.assertFalse((ROOT / "docs/research/registry.json").exists())
+        active = set()
         for manifest_path in (ROOT / "docs/research").glob("*/manifest.json"):
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             self.assertEqual(

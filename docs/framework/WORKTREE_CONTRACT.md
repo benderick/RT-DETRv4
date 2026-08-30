@@ -10,7 +10,8 @@
 - 共享同一套 Git 历史和对象，不会重复复制整个 `.git`；
 - 各自拥有独立的文件、HEAD、索引和未提交修改；
 - 一个分支同一时间只能被一个 worktree 检出；
-- 不共享 Git 忽略的 `logs/`、`pretrain/` 等大文件目录。
+- 不共享 Git 忽略的 `logs/`、`pretrain/` 等大文件目录；唯一例外是管理工具会让
+  所有 worktree 共同使用主 worktree 的 `logs/research_ledger/` 本地账本。
 
 本项目约定把 worktree 放在主仓库旁边：
 
@@ -28,8 +29,9 @@
 
 1. `main` 只保存稳定 OBB 框架、direct-angle、O²、通用诊断和研究管理设施；
    活动 idea 的模型、配置和专用测试不进入 `main`。
-2. 每批受控实验从不可移动的 tag 开始，当前 O² 基线为
-   `obb-o2-baseline-v1`。禁止重写或强制移动该 tag。
+2. 每批受控实验在 manifest 中锁定不可移动的科学/模型 tag，当前 O² 基线为
+   `obb-o2-baseline-v1`。代码分支从包含最新管理设施的干净 `main` 创建，但必须证明
+   该 tag 是分支祖先；禁止重写或强制移动科学基线 tag。
 3. 一个 idea 对应一个 `idea/<idea_id>` 分支和一个同名 worktree。
 4. 训练进程运行时，不在它的 worktree 内切换分支、rebase 或修改模型源码。
 5. 每次正式训练前 `git status --short` 必须为空。诊断 manifest 中
@@ -59,8 +61,9 @@ logs/research/<idea_id>/               # 本地证据，不进 Git
 ```
 
 `docs/research/<idea_id>/manifest.json` 是该分支的活动 idea 真源，至少记录
-`id/status/base_tag/base_commit/branch/owned_paths`。中央 `docs/research/registry.json`
-只保存已退役记录，避免多个 worktree 同时修改一个文件。
+`id/status/base_tag/base_commit/branch/owned_paths`。中央退役记录和经验卡位于主
+worktree 被 Git 忽略的 `logs/research_ledger/`；所有 worktree 由管理工具自动发现
+同一个账本，因此失败清退不会修改或产生 `main` 提交。
 其中 `base_commit` 是 `base_tag` 解析到的精确科学/模型基线；分支可以额外继承
 不改变模型的管理工具提交，正式训练仍会另行记录实际 HEAD。
 
@@ -100,7 +103,7 @@ git worktree list
 git worktree add \
   ../RT-DETRv4-new_idea \
   -b idea/new_idea \
-  obb-o2-baseline-v1
+  main
 ```
 
 进入新 worktree：
@@ -133,7 +136,9 @@ ln -s \
 不要链接整个 `logs/`：idea 的 `logs/research/<idea_id>/` 必须真正存在于自己的
 worktree，以免多个训练互相覆盖。
 
-然后只创建命题卡和 manifest，通过 candidate gate 后再添加实现目录。
+然后只创建命题卡和 manifest，其中 `base_tag/base_commit` 仍填写
+`obb-o2-baseline-v1` 及其解析提交；通过 candidate gate 后再添加实现目录。这样分支
+拥有最新 worktree/ledger 工具，但科学模型基线没有被悄悄移动。
 
 ## 6. 日常使用
 
@@ -181,22 +186,32 @@ git worktree list
 
 ### 失败
 
-1. 把 manifest 状态改为 `rejected`，填写 verdict 和经验卡编号。
-2. 在 `EXPERIENCE_LOG.md` 写一张可复用经验卡。
-3. 先为完整失败实现打 archive tag，再执行清退预演：
+1. 把 manifest 状态改为 `rejected`，填写 verdict 和 `experience_entry`。
+2. 在 `docs/research/<idea_id>/experience.md` 写一张以
+   `## <experience_entry>：...` 开头的可复用经验卡，然后原子写入本地总账：
 
 ```bash
-git tag -a archive/new_idea/rejected-YYYYMMDD -m "new_idea rejected"
+python tools/research/manage_ideas.py record-experience new_idea
+```
+
+3. 把 manifest 声明的少量 `preserved_evidence` 复制到主 worktree 对应的
+   `logs/...` 路径；checkpoint、逐 step 张量等大产物不复制。
+4. 执行清退预演和应用：
+
+```bash
 python tools/research/manage_ideas.py retire new_idea
 python tools/research/manage_ideas.py retire new_idea --apply
 ```
 
-4. 审查并提交清退结果。只把经验卡和退役记录整理进 `main`，不 merge
-   失败实现。
-5. 确认 worktree 无未提交修改后，在主仓库执行：
+`--apply` 只更新被忽略的本地 ledger，不修改 `main`；失败实现不 merge、不提交清退
+结果。若确需长期保留失败源码，可以另打 archive tag，否则直接删除分支。
+
+5. 在主仓库确认目标路径后移除 worktree；因为其中通常包含被忽略的日志和清退产生的
+   未提交删除，需要显式 `--force`：
 
 ```bash
-git worktree remove ../RT-DETRv4-new_idea
+git worktree remove --force ../RT-DETRv4-new_idea
+git branch -D idea/new_idea
 ```
 
 禁止直接 `rm -rf` worktree；`git worktree remove` 会同时正确更新 Git 元数据。
@@ -231,6 +246,21 @@ git worktree prune
 ```
 
 `prune` 只清理失效的 worktree 元数据，不是日常删除命令。
+
+### 为什么主干里看不到失败经验
+
+这是有意设计。实时退役表和经验总账位于主 worktree 的
+`logs/research_ledger/registry.json` 与 `EXPERIENCE_LOG.md`，受 `.gitignore` 保护，
+不会让 `main` 变脏。用下面命令查看实际路径和内容：
+
+```bash
+python tools/research/manage_ideas.py ledger-path
+python tools/research/manage_ideas.py list
+```
+
+本地账本不随 clone/pull/push 迁移，必须纳入机器备份。管理工具拒绝任何 idea 把
+`logs/research_ledger/` 声明为可清理 artifact；多个 worktree 的写入由共享文件锁
+串行化，每次原子更新前保留 `.bak`。
 
 ## 10. 每次训练前的最短检查
 

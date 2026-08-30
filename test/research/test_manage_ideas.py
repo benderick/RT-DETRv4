@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from tools.research.manage_ideas import (
     MANIFEST_SCHEMA_VERSION,
@@ -9,6 +10,11 @@ from tools.research.manage_ideas import (
     apply_artifact_prune,
     apply_retirement,
     artifact_prune_plan,
+    experience_log_path,
+    initialize_ledger,
+    record_experience,
+    registry_path,
+    research_ledger_root,
     retirement_plan,
     validate_registry,
 )
@@ -22,16 +28,18 @@ class ResearchIdeaLifecycleTest(unittest.TestCase):
         (self.root / "tools/research/demo").mkdir(parents=True)
         (self.root / "test/research/demo").mkdir(parents=True)
         (self.root / "logs/demo").mkdir(parents=True)
+        self.ledger = self.root / "logs/research_ledger"
+        self.ledger.mkdir(parents=True)
         (self.root / "docs/research/demo/idea.md").write_text("claim\n")
         (self.root / "tools/research/demo/run.py").write_text("pass\n")
         (self.root / "test/research/demo/test_demo.py").write_text("pass\n")
         (self.root / "logs/demo/report.json").write_text("{}\n")
         (self.root / "logs/demo/raw.pt").write_bytes(b"raw")
-        (self.root / "docs/research/EXPERIENCE_LOG.md").write_text(
+        (self.ledger / "EXPERIENCE_LOG.md").write_text(
             "# log\n\n## EXP-DEMO：decision\n")
         self.registry = {
             "schema_version": "research-idea-registry-v1",
-            "reserved_ids": ["o2"],
+            "reserved_ids": ["o2", "research_ledger"],
             "ideas": [{
                 "id": "demo",
                 "title": "demo",
@@ -49,7 +57,7 @@ class ResearchIdeaLifecycleTest(unittest.TestCase):
                 "retired_on": None,
             }],
         }
-        (self.root / "docs/research/registry.json").write_text(
+        (self.ledger / "registry.json").write_text(
             json.dumps(self.registry))
 
     def tearDown(self):
@@ -74,9 +82,11 @@ class ResearchIdeaLifecycleTest(unittest.TestCase):
         self.assertTrue((self.root / "logs/demo/raw.pt").is_file())
         self.assertTrue((self.root / "logs/demo/report.json").is_file())
         value = json.loads(
-            (self.root / "docs/research/registry.json").read_text())
+            (self.ledger / "registry.json").read_text())
         self.assertEqual(value["ideas"][0]["status"], "retired")
         self.assertEqual(value["ideas"][0]["retired_on"], "2026-08-26")
+        backup = json.loads((self.ledger / "registry.json.bak").read_text())
+        self.assertEqual(backup["ideas"][0]["status"], "rejected")
         validate_registry(self.root)
 
         prune = artifact_prune_plan(self.root, "demo")
@@ -86,7 +96,7 @@ class ResearchIdeaLifecycleTest(unittest.TestCase):
         self.assertTrue((self.root / "logs/demo/report.json").is_file())
 
     def test_missing_experience_card_is_rejected(self):
-        (self.root / "docs/research/EXPERIENCE_LOG.md").write_text("# empty\n")
+        (self.ledger / "EXPERIENCE_LOG.md").write_text("# empty\n")
         with self.assertRaisesRegex(RegistryError, "experience card"):
             validate_registry(self.root)
 
@@ -103,8 +113,6 @@ class ResearchIdeaLifecycleTest(unittest.TestCase):
             "docs/research", "tools/research", "test/research",
         ):
             (self.root / parent / idea_id).mkdir(parents=True)
-        with (self.root / "docs/research/EXPERIENCE_LOG.md").open("a") as stream:
-            stream.write("\n## EXP-FRESH：decision\n")
         idea = {
             "id": idea_id,
             "title": "fresh",
@@ -129,12 +137,19 @@ class ResearchIdeaLifecycleTest(unittest.TestCase):
                 "schema_version": MANIFEST_SCHEMA_VERSION,
                 "idea": idea,
             }))
+        (self.root / f"docs/research/{idea_id}/experience.md").write_text(
+            "## EXP-FRESH：decision\n\n- result\n")
+
+        recorded = record_experience(self.root, idea_id)
+        self.assertTrue(recorded["recorded"])
+        self.assertTrue((self.ledger / "EXPERIENCE_LOG.md.bak").is_file())
+        self.assertFalse(record_experience(self.root, idea_id)["recorded"])
 
         self.assertIn(idea_id, validate_registry(self.root))
         apply_retirement(self.root, idea_id, retired_on="2026-08-30")
         self.assertFalse((self.root / f"docs/research/{idea_id}").exists())
         archived = json.loads(
-            (self.root / "docs/research/registry.json").read_text())
+            (self.ledger / "registry.json").read_text())
         archived_idea = next(
             item for item in archived["ideas"] if item["id"] == idea_id)
         self.assertEqual(archived_idea["status"], "retired")
@@ -157,10 +172,62 @@ class ResearchIdeaLifecycleTest(unittest.TestCase):
                 "logs/baseline/report.json",
             ]
             validate_registry(self.root, self.registry)
-            (self.root / "docs/research/registry.json").write_text(
+            (self.ledger / "registry.json").write_text(
                 json.dumps(self.registry))
             with self.assertRaisesRegex(RegistryError, "escapes logs"):
                 retirement_plan(self.root, "demo", prune_artifacts=True)
+
+    def test_local_ledger_paths_are_centralized_and_protected(self):
+        self.assertEqual(research_ledger_root(self.root), self.ledger)
+        self.assertEqual(registry_path(self.root), self.ledger / "registry.json")
+        self.assertEqual(
+            experience_log_path(self.root), self.ledger / "EXPERIENCE_LOG.md")
+
+        self.registry["ideas"][0]["discard_artifacts_on_retire"] = [
+            "logs/research_ledger/registry.json",
+        ]
+        with self.assertRaisesRegex(RegistryError, "ledger is protected"):
+            validate_registry(self.root, self.registry)
+
+    def test_initialize_ledger_is_idempotent_and_refuses_partial_state(self):
+        with tempfile.TemporaryDirectory() as empty_name:
+            empty = Path(empty_name)
+            first = initialize_ledger(empty)
+            self.assertTrue(first["created"])
+            self.assertFalse(initialize_ledger(empty)["created"])
+            registry = json.loads(
+                (empty / "logs/research_ledger/registry.json").read_text())
+            self.assertIn("research_ledger", registry["reserved_ids"])
+
+        with tempfile.TemporaryDirectory() as partial_name:
+            partial = Path(partial_name)
+            (partial / "logs/research_ledger").mkdir(parents=True)
+            (partial / "logs/research_ledger/registry.json").write_text("{}")
+            with self.assertRaisesRegex(RegistryError, "incomplete"):
+                initialize_ledger(partial)
+
+    def test_linked_worktree_resolves_the_main_worktree_ledger(self):
+        with tempfile.TemporaryDirectory() as parent_name:
+            parent = Path(parent_name)
+            main = parent / "project"
+            idea = parent / "project-new_idea"
+            main.mkdir()
+            idea.mkdir()
+            (idea / ".git").write_text("gitdir: shared/worktrees/new_idea\n")
+            porcelain = (
+                f"worktree {main}\n"
+                "HEAD 1111111111111111111111111111111111111111\n"
+                "branch refs/heads/main\n\n"
+                f"worktree {idea}\n"
+                "HEAD 2222222222222222222222222222222222222222\n"
+                "branch refs/heads/idea/new_idea\n"
+            )
+            with patch(
+                    "tools.research.manage_ideas._optional_git_value",
+                    return_value=porcelain):
+                self.assertEqual(
+                    research_ledger_root(idea),
+                    main / "logs/research_ledger")
 
 
 if __name__ == "__main__":

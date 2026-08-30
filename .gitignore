@@ -201,7 +201,7 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
-# Local training artifacts and downloaded backbone weights
+# Local training artifacts, the protected logs/research_ledger, and weights
 /logs/*
 /pretrain/
 
