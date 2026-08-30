@@ -32,7 +32,7 @@ VALID_STATUSES = {
 }
 RETIRABLE_STATUS = "rejected"
 SOURCE_ROOTS = (
-    Path("docs/research"),
+    Path("docs/ideas"),
     Path("tools/research"),
     Path("test/research"),
     Path("engine/rtv4/obb/incubator"),
@@ -41,7 +41,7 @@ SOURCE_ROOTS = (
 IDEA_ID = re.compile(r"^[a-z][a-z0-9_]*$")
 GIT_COMMIT = re.compile(r"^[0-9a-f]{40}$")
 LEDGER_ENVIRONMENT = "RTV4_RESEARCH_LEDGER"
-LEDGER_RELATIVE = Path("logs/research_ledger")
+LEDGER_RELATIVE = Path("research/ledger")
 LEDGER_REGISTRY_NAME = "registry.json"
 LEDGER_EXPERIENCE_NAME = "EXPERIENCE_LOG.md"
 LEDGER_RESERVED_ID = "research_ledger"
@@ -90,7 +90,7 @@ def _main_worktree_root(root: Path) -> Path:
             worktree = None
     raise RegistryError(
         "No worktree currently owns branch 'main'; either restore the main "
-        f"worktree or set {LEDGER_ENVIRONMENT} to its logs/research_ledger path")
+        f"worktree or set {LEDGER_ENVIRONMENT} to its research/ledger path")
 
 
 def research_ledger_root(
@@ -113,7 +113,7 @@ def research_ledger_root(
     if candidate.name != LEDGER_RELATIVE.name or \
             candidate.parent.name != LEDGER_RELATIVE.parent.name:
         raise RegistryError(
-            "Research ledger must be an exact logs/research_ledger directory; "
+            "Research ledger must be an exact research/ledger directory; "
             f"got {candidate}")
     return candidate
 
@@ -142,7 +142,7 @@ def _ledger_lock(root: Path):
 
 
 def manifest_path(root: Path, idea_id: str) -> Path:
-    return root / "docs/research" / idea_id / "manifest.json"
+    return root / "docs/ideas" / idea_id / "manifest.json"
 
 
 def load_registry(root: Path) -> dict:
@@ -202,11 +202,11 @@ def _artifact_path(
     relative = Path(raw)
     if relative.is_absolute() or ".." in relative.parts or not relative.parts:
         raise RegistryError(f"Unsafe artifact path for {idea_id}: {raw!r}")
-    if relative.parts[0] != "logs":
-        raise RegistryError(f"Research artifact must be under logs/: {raw!r}")
     if relative == LEDGER_RELATIVE or LEDGER_RELATIVE in relative.parents:
         raise RegistryError(
             f"Research ledger is protected from artifact lifecycle actions: {raw!r}")
+    if relative.parts[0] != "logs":
+        raise RegistryError(f"Research artifact must be under logs/: {raw!r}")
     resolved_root = root.resolve()
     resolved = (root / relative).resolve(strict=False)
     if not allow_read_only_external and not _inside(
@@ -246,7 +246,7 @@ def _idea_map(registry: dict) -> dict[str, dict]:
 
 
 def _manifest_ideas(root: Path) -> dict[str, dict]:
-    research_root = root / "docs/research"
+    research_root = root / "docs/ideas"
     result: dict[str, dict] = {}
     for path in sorted(research_root.glob("*/manifest.json")):
         try:
@@ -665,7 +665,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--ledger-root", type=Path,
-        help=("override the protected local logs/research_ledger directory; "
+        help=("override the protected local research/ledger directory; "
               f"equivalent to {LEDGER_ENVIRONMENT}"),
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -677,7 +677,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("validate", help="validate registry and live ownership")
     record = subparsers.add_parser(
         "record-experience",
-        help="atomically append docs/research/<idea>/experience.md to the ledger",
+        help="atomically append docs/ideas/<idea>/experience.md to the ledger",
     )
     record.add_argument("idea_id")
     retire = subparsers.add_parser("retire", help="plan or apply safe idea retirement")

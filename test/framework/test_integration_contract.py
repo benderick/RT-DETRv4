@@ -1,4 +1,5 @@
 import json
+import re
 import unittest
 from pathlib import Path
 
@@ -83,14 +84,14 @@ class FrameworkContractTest(unittest.TestCase):
 
     def test_integration_contract_and_canonical_packages_exist(self):
         self.assertTrue((ROOT / "docs/framework/INTEGRATION_CONTRACT.md").is_file())
-        self.assertTrue((ROOT / "docs/framework/WORKTREE_CONTRACT.md").is_file())
-        self.assertTrue((ROOT / "docs/research/o2/implementation_audit.md").is_file())
-        self.assertTrue((ROOT / "docs/research/IDEA_LIFECYCLE.md").is_file())
-        self.assertEqual(LEDGER_RELATIVE, Path("logs/research_ledger"))
-        self.assertFalse((ROOT / "docs/research/EXPERIENCE_LOG.md").exists())
-        self.assertFalse((ROOT / "docs/research/registry.json").exists())
+        self.assertTrue((ROOT / "docs/development/WORKTREE_CONTRACT.md").is_file())
+        self.assertTrue((ROOT / "docs/development/IDEA_LIFECYCLE.md").is_file())
+        self.assertTrue((ROOT / "docs/methods/o2/implementation_audit.md").is_file())
+        self.assertTrue((ROOT / "docs/methods/o2/diagnostic_protocol.md").is_file())
+        self.assertEqual(LEDGER_RELATIVE, Path("research/ledger"))
+        self.assertFalse((ROOT / "docs/research").exists())
         active = set()
-        for manifest_path in (ROOT / "docs/research").glob("*/manifest.json"):
+        for manifest_path in (ROOT / "docs/ideas").glob("*/manifest.json"):
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             self.assertEqual(
                 manifest["schema_version"], "research-idea-manifest-v1")
@@ -98,9 +99,9 @@ class FrameworkContractTest(unittest.TestCase):
         self.assertTrue((ROOT / "engine/rtv4/obb/methods/o2/adr.py").is_file())
         self.assertFalse((ROOT / "configs/research").exists())
         self.assertEqual(
-            {path.name for path in (ROOT / "docs/research").iterdir()
+            {path.name for path in (ROOT / "docs/ideas").iterdir()
              if path.is_dir()},
-            {"o2", *active},
+            active,
         )
         self.assertEqual(
             {path.name for path in (ROOT / "test/research").iterdir()
@@ -113,6 +114,29 @@ class FrameworkContractTest(unittest.TestCase):
             {"o2", *active},
         )
         self.assertFalse((ROOT / "参考资料").exists())
+        self.assertFalse((ROOT / "项目说明.md").exists())
+
+    def test_tracked_documentation_has_no_broken_local_links(self):
+        markdown_files = [
+            ROOT / "README.md",
+            *sorted((ROOT / "docs").rglob("*.md")),
+        ]
+        link_pattern = re.compile(r"(?<!!)\[[^\]]*\]\(([^)]+)\)")
+        broken = []
+        for source in markdown_files:
+            for raw_target in link_pattern.findall(
+                    source.read_text(encoding="utf-8")):
+                target = raw_target.strip().split("#", 1)[0]
+                if (
+                    not target
+                    or "://" in target
+                    or target.startswith(("mailto:", "<"))
+                ):
+                    continue
+                if not (source.parent / target).resolve().exists():
+                    broken.append(
+                        f"{source.relative_to(ROOT)} -> {raw_target}")
+        self.assertEqual(broken, [])
 
 
 if __name__ == "__main__":

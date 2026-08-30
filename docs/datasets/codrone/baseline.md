@@ -17,7 +17,7 @@ O² 是主 OBB 实现。唯一保留的对照是独立的标量角度回归头�
 CODrone 评估报告 IoU 0.5 和 0.75 下的 DOTA-07 AP。checkpoint 选择使用 `mAP50/75 DOTA-07`；COCO 风格的 `mAP@[.50:.95]` 仅作为诊断指标。
 
 ```bash
-conda run -n wyq-deim python train.py \
+/icislab/volume1/liuxiaolong/anaconda3/envs/wyq-deim/bin/python train.py \
   -c configs/dfine/dfine_obb_o2.yml -d cuda --seed 0
 ```
 
@@ -36,13 +36,16 @@ conda run -n wyq-deim python train.py \
 记录以 gzip JSONL stream 形式按 rank 原子写入，并在 solver 的 failure-safe cleanup 路径中关闭。因此，分析直接从实验目录读取；不需要用户手动整理数据。
 
 ```bash
-conda run -n wyq-deim python tools/analysis/summarize_obb_diagnostics.py \
+/icislab/volume1/liuxiaolong/anaconda3/envs/wyq-deim/bin/python \
+  tools/analysis/summarize_obb_diagnostics.py \
   logs/dfine_obb_o2 --output ./obb_analysis
 
-conda run -n wyq-deim python tools/analysis/visualize_obb_mechanisms.py \
+/icislab/volume1/liuxiaolong/anaconda3/envs/wyq-deim/bin/python \
+  tools/analysis/visualize_obb_mechanisms.py \
   logs/dfine_obb_o2 --output ./obb_mechanism_cases
 
-conda run -n wyq-deim python tools/analysis/compare_obb_mechanisms.py \
+/icislab/volume1/liuxiaolong/anaconda3/envs/wyq-deim/bin/python \
+  tools/analysis/compare_obb_mechanisms.py \
   logs/dfine_obb_angle logs/dfine_obb_o2 --output ./obb_paired_mechanisms
 ```
 
@@ -51,7 +54,8 @@ conda run -n wyq-deim python tools/analysis/compare_obb_mechanisms.py \
 ## 推理
 
 ```bash
-python tools/inference/obb_infer.py \
+/icislab/volume1/liuxiaolong/anaconda3/envs/wyq-deim/bin/python \
+  tools/inference/obb_infer.py \
   --config configs/dfine/dfine_obb_o2.yml \
   --checkpoint logs/dfine_obb_o2/best_stg1.pth \
   --input /path/to/images --output ./obb_predictions \

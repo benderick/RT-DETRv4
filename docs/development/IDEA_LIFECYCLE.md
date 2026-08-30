@@ -48,12 +48,12 @@ idea 分支的命题卡和 `manifest.json`，不创建模型、配置或测试�
 ## 3. 隔离边界
 
 每个活动 idea 必须在独立 `idea/<idea_id>` 分支和 worktree 中进行，具体 Git
-契约与初次使用方法见 `docs/framework/WORKTREE_CONTRACT.md`。
+契约与初次使用方法见 `docs/development/WORKTREE_CONTRACT.md`。
 
 Stage 0 的所有权目录仅允许为：
 
 ```text
-docs/research/<idea>/
+docs/ideas/<idea>/
 tools/research/<idea>/
 test/research/<idea>/
 ```
@@ -84,7 +84,7 @@ forward，不得向通用 evaluator、dataset adapter 或 postprocessor 塞入�
 ## 5. 清退与证据保留
 
 idea 进入 `rejected` 后，先在分支自己的
-`docs/research/<idea>/experience.md` 写经验卡，并原子追加到主 worktree 的本地账本：
+`docs/ideas/<idea>/experience.md` 写经验卡，并原子追加到主 worktree 的本地账本：
 
 ```bash
 python tools/research/manage_ideas.py record-experience <idea>
@@ -96,8 +96,8 @@ python tools/research/manage_ideas.py retire <idea> --apply
 idea id 的隔离目录；`o2` 是保留 id，工具会拒绝操作。清退工具会把分支
 manifest 转成主 worktree 内被 Git 忽略的本地退役记录。清退后仍保留：
 
-- `logs/research_ledger/registry.json` 中的命题、verdict、证据路径和清退日期；
-- `logs/research_ledger/EXPERIENCE_LOG.md` 中的人可读经验卡；
+- `research/ledger/registry.json` 中的命题、verdict、证据路径和清退日期；
+- `research/ledger/EXPERIENCE_LOG.md` 中的人可读经验卡；
 - `report.json`、协议和少量关键图等小型裁决证据。
 
 这两份账本不进入 Git，因此清退失败 idea 不需要修改或提交 `main`。管理工具使用共享
@@ -119,8 +119,8 @@ python tools/research/manage_ideas.py prune-artifacts <idea> --apply
 ## 6. 分支 manifest 与中央退役表
 
 活动 idea 的机器可读真源是它自己分支中的
-`docs/research/<idea>/manifest.json`。已退役记录的机器可读真源是主 worktree 的
-`logs/research_ledger/registry.json`；人可读经验位于同目录的
+`docs/ideas/<idea>/manifest.json`。已退役记录的机器可读真源是主 worktree 的
+`research/ledger/registry.json`；人可读经验位于同目录的
 `EXPERIENCE_LOG.md`。工具通过 `git worktree list` 自动找到检出 `main` 的 worktree，
 因此从任意 idea worktree 执行都会落到同一个本地账本。
 
@@ -138,5 +138,5 @@ python tools/research/manage_ideas.py validate
 
 `init-ledger` 只用于新 clone 或首次采用本契约；若只存在 registry/experience 其中之一，
 工具会拒绝猜测和覆盖。必要时可在命令的 subcommand 前使用
-`--ledger-root /absolute/path/logs/research_ledger`，或设置任务专用环境变量
+`--ledger-root /absolute/path/research/ledger`，或设置任务专用环境变量
 `RTV4_RESEARCH_LEDGER`。

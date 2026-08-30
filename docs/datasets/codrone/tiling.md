@@ -22,18 +22,20 @@ tile AP 不作为报告结果。direct-angle 与 O² 必须共享同一份物化
 先在 tiny split 验证：
 
 ```bash
-conda run -n wyq-deim python tools/dataset/split_codrone_obb.py \
-  --source-root /home/liuxiaolong/futurama/data/CODrone \
-  --output-root /home/liuxiaolong/futurama/data/CODrone/standard_patches_t \
+/icislab/volume1/liuxiaolong/anaconda3/envs/wyq-deim/bin/python \
+  tools/dataset/split_codrone_obb.py \
+  --source-root ../data/CODrone \
+  --output-root ../data/CODrone/standard_patches_t \
   --splits train_t val_t test_t --nproc 4 --preview-samples 4
 ```
 
 正式数据：
 
 ```bash
-conda run -n wyq-deim python tools/dataset/split_codrone_obb.py \
-  --source-root /home/liuxiaolong/futurama/data/CODrone \
-  --output-root /home/liuxiaolong/futurama/data/CODrone/standard_patches \
+/icislab/volume1/liuxiaolong/anaconda3/envs/wyq-deim/bin/python \
+  tools/dataset/split_codrone_obb.py \
+  --source-root ../data/CODrone \
+  --output-root ../data/CODrone/standard_patches \
   --splits train val test --nproc 10 --preview-samples 12
 ```
 
@@ -45,14 +47,21 @@ manifest 固定协议、命令、Git 状态和源 inventory SHA-256。
 ## 训练、评估和推理
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 python train.py -c configs/dfine/dfine_obb_o2_tile.yml
-CUDA_VISIBLE_DEVICES=0 python train.py -c configs/dfine/dfine_obb_o2_tile.yml \
+CUDA_VISIBLE_DEVICES=0 \
+/icislab/volume1/liuxiaolong/anaconda3/envs/wyq-deim/bin/python train.py \
+  -c configs/dfine/dfine_obb_o2_tile.yml
+
+CUDA_VISIBLE_DEVICES=0 \
+/icislab/volume1/liuxiaolong/anaconda3/envs/wyq-deim/bin/python train.py \
+  -c configs/dfine/dfine_obb_o2_tile.yml \
   -r logs/dfine_obb_o2_tile/best_stg1.pth --test-only
 
-CUDA_VISIBLE_DEVICES=0 python tools/inference/obb_tile_infer.py \
+CUDA_VISIBLE_DEVICES=0 \
+/icislab/volume1/liuxiaolong/anaconda3/envs/wyq-deim/bin/python \
+  tools/inference/obb_tile_infer.py \
   --config configs/dfine/dfine_obb_o2_tile.yml \
   --checkpoint logs/dfine_obb_o2_tile/best_stg1.pth \
-  --tile-root /home/liuxiaolong/futurama/data/CODrone/standard_patches/test \
+  --tile-root ../data/CODrone/standard_patches/test \
   --output ./tile_test_predictions
 ```
 
@@ -70,10 +79,12 @@ direct-angle 对照将配置和日志目录中的 `o2` 换成 `angle`。两条�
 抑制类型。分析入口：
 
 ```bash
-conda run -n wyq-deim python tools/analysis/summarize_obb_diagnostics.py \
+/icislab/volume1/liuxiaolong/anaconda3/envs/wyq-deim/bin/python \
+  tools/analysis/summarize_obb_diagnostics.py \
   logs/dfine_obb_o2_tile --output ./tile_analysis
 
-conda run -n wyq-deim python tools/analysis/visualize_tile_merge_mechanisms.py \
+/icislab/volume1/liuxiaolong/anaconda3/envs/wyq-deim/bin/python \
+  tools/analysis/visualize_tile_merge_mechanisms.py \
   logs/dfine_obb_o2_tile --mode collision --count 20 --output ./tile_collisions
 ```
 

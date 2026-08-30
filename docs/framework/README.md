@@ -5,4 +5,5 @@
 - [OBB 坐标与几何约定](obb_conventions.md)
 - [CODrone 数据适配](../datasets/codrone/README.md)
 - [切片协议](../datasets/codrone/tiling.md)
-- [O² 复现差异审计](../research/o2/implementation_audit.md)
+- [O² 复现差异审计](../methods/o2/implementation_audit.md)
+- [Worktree 与 idea 生命周期](../development/README.md)

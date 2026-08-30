@@ -11,7 +11,7 @@
 - 各自拥有独立的文件、HEAD、索引和未提交修改；
 - 一个分支同一时间只能被一个 worktree 检出；
 - 不共享 Git 忽略的 `logs/`、`pretrain/` 等大文件目录；唯一例外是管理工具会让
-  所有 worktree 共同使用主 worktree 的 `logs/research_ledger/` 本地账本。
+  所有 worktree 共同使用主 worktree 的 `research/ledger/` 本地账本。
 
 本项目约定把 worktree 放在主仓库旁边：
 
@@ -52,7 +52,7 @@
 每个活动 idea 只能拥有：
 
 ```text
-docs/research/<idea_id>/
+docs/ideas/<idea_id>/
 tools/research/<idea_id>/
 test/research/<idea_id>/
 engine/rtv4/obb/incubator/<idea_id>/   # 只有 prototype 允许
@@ -60,9 +60,9 @@ configs/incubator/<idea_id>/           # 只有 prototype 允许
 logs/research/<idea_id>/               # 本地证据，不进 Git
 ```
 
-`docs/research/<idea_id>/manifest.json` 是该分支的活动 idea 真源，至少记录
+`docs/ideas/<idea_id>/manifest.json` 是该分支的活动 idea 真源，至少记录
 `id/status/base_tag/base_commit/branch/owned_paths`。中央退役记录和经验卡位于主
-worktree 被 Git 忽略的 `logs/research_ledger/`；所有 worktree 由管理工具自动发现
+worktree 被 Git 忽略的 `research/ledger/`；所有 worktree 由管理工具自动发现
 同一个账本，因此失败清退不会修改或产生 `main` 提交。
 其中 `base_commit` 是 `base_tag` 解析到的精确科学/模型基线；分支可以额外继承
 不改变模型的管理工具提交，正式训练仍会另行记录实际 HEAD。
@@ -163,7 +163,7 @@ git status --short
 提交时使用精确路径，避免把 checkpoint 或其他 idea 带入提交：
 
 ```bash
-git add docs/research/new_idea tools/research/new_idea test/research/new_idea
+git add docs/ideas/new_idea tools/research/new_idea test/research/new_idea
 git status --short
 git commit -m "research(new_idea): freeze Stage 0 protocol"
 ```
@@ -187,7 +187,7 @@ git worktree list
 ### 失败
 
 1. 把 manifest 状态改为 `rejected`，填写 verdict 和 `experience_entry`。
-2. 在 `docs/research/<idea_id>/experience.md` 写一张以
+2. 在 `docs/ideas/<idea_id>/experience.md` 写一张以
    `## <experience_entry>：...` 开头的可复用经验卡，然后原子写入本地总账：
 
 ```bash
@@ -250,7 +250,7 @@ git worktree prune
 ### 为什么主干里看不到失败经验
 
 这是有意设计。实时退役表和经验总账位于主 worktree 的
-`logs/research_ledger/registry.json` 与 `EXPERIENCE_LOG.md`，受 `.gitignore` 保护，
+`research/ledger/registry.json` 与 `EXPERIENCE_LOG.md`，受 `.gitignore` 保护，
 不会让 `main` 变脏。用下面命令查看实际路径和内容：
 
 ```bash
@@ -259,7 +259,7 @@ python tools/research/manage_ideas.py list
 ```
 
 本地账本不随 clone/pull/push 迁移，必须纳入机器备份。管理工具拒绝任何 idea 把
-`logs/research_ledger/` 声明为可清理 artifact；多个 worktree 的写入由共享文件锁
+`research/ledger/` 声明为可清理 artifact；多个 worktree 的写入由共享文件锁
 串行化，每次原子更新前保留 `.bak`。
 
 ## 10. 每次训练前的最短检查

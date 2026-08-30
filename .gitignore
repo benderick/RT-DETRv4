@@ -201,7 +201,7 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
-# Local training artifacts, the protected logs/research_ledger, and weights
+# Local training artifacts and downloaded backbone weights
 /logs/*
 /pretrain/
 
@@ -229,3 +229,7 @@ test/framework/data/*
 !test/framework/data/test_codrone_tiling.py
 !test/framework/data/test_full_dataset_audit.py
 !test/framework/data/test_uav_rod_data.py
+
+# Local research ledger and paper/reference workspace. Stable method and
+# framework documentation stays tracked under docs/.
+/research/
