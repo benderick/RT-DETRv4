@@ -141,7 +141,7 @@ class ResearchIdeaLifecycleTest(unittest.TestCase):
         self.assertEqual(archived_idea["retired_on"], "2026-08-30")
         validate_registry(self.root)
 
-    def test_preserved_baseline_link_is_read_only_but_never_disposable(self):
+    def test_linked_baseline_is_visible_but_never_disposable(self):
         with tempfile.TemporaryDirectory() as external_name:
             external = Path(external_name)
             (external / "report.json").write_text("{}\n")
@@ -156,8 +156,11 @@ class ResearchIdeaLifecycleTest(unittest.TestCase):
             self.registry["ideas"][0]["discard_artifacts_on_retire"] = [
                 "logs/baseline/report.json",
             ]
+            validate_registry(self.root, self.registry)
+            (self.root / "docs/research/registry.json").write_text(
+                json.dumps(self.registry))
             with self.assertRaisesRegex(RegistryError, "escapes logs"):
-                validate_registry(self.root, self.registry)
+                retirement_plan(self.root, "demo", prune_artifacts=True)
 
 
 if __name__ == "__main__":

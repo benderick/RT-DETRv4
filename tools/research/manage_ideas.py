@@ -15,6 +15,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 from typing import Iterable
@@ -191,6 +192,17 @@ def _combined_ideas(root: Path, registry: dict) -> dict[str, dict]:
     return {**archived, **active}
 
 
+def _git_value(root: Path, *arguments: str) -> str:
+    try:
+        return subprocess.run(
+            ["git", *arguments], cwd=root, check=True, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise RegistryError(
+            f"Cannot verify Git metadata {' '.join(arguments)!r}: {error}") from error
+
+
 def validate_registry(root: Path, registry: dict | None = None) -> dict[str, dict]:
     root = root.resolve()
     discover_manifests = registry is None
@@ -232,6 +244,19 @@ def validate_registry(root: Path, registry: dict | None = None) -> dict[str, dic
             if idea.get("branch") != f"idea/{idea_id}":
                 raise RegistryError(
                     f"Active idea {idea_id} must declare branch idea/{idea_id}")
+            if (root / ".git").exists():
+                tag_commit = _git_value(
+                    root, "rev-parse", "--verify",
+                    f"refs/tags/{idea['base_tag']}^{{}}")
+                if tag_commit != idea["base_commit"]:
+                    raise RegistryError(
+                        f"Active idea {idea_id} base_tag resolves to "
+                        f"{tag_commit}, not declared {idea['base_commit']}")
+                branch = _git_value(root, "branch", "--show-current")
+                if branch != idea["branch"]:
+                    raise RegistryError(
+                        f"Active idea {idea_id} manifest belongs to "
+                        f"{idea['branch']}, current branch is {branch or 'detached HEAD'}")
         paths = idea.get("owned_paths", [])
         if not isinstance(paths, list) or len(paths) != len(set(map(str, paths))):
             raise RegistryError(f"owned_paths for {idea_id} must be a unique list")
@@ -253,7 +278,10 @@ def validate_registry(root: Path, registry: dict | None = None) -> dict[str, dic
             for raw in values:
                 _artifact_path(
                     root, idea_id, raw,
-                    allow_read_only_external=(key == "preserved_evidence"))
+                    # Validation may inspect another worktree's explicitly
+                    # linked evidence.  Every deletion plan resolves the same
+                    # path again with the strict default before mutating it.
+                    allow_read_only_external=True)
         if status in {"rejected", "retired"}:
             entry = idea.get("experience_entry")
             if not isinstance(entry, str) or f"## {entry}：" not in experience_text:

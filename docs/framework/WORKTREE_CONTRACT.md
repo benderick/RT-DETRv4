@@ -61,6 +61,8 @@ logs/research/<idea_id>/               # 本地证据，不进 Git
 `docs/research/<idea_id>/manifest.json` 是该分支的活动 idea 真源，至少记录
 `id/status/base_tag/base_commit/branch/owned_paths`。中央 `docs/research/registry.json`
 只保存已退役记录，避免多个 worktree 同时修改一个文件。
+其中 `base_commit` 是 `base_tag` 解析到的精确科学/模型基线；分支可以额外继承
+不改变模型的管理工具提交，正式训练仍会另行记录实际 HEAD。
 
 ## 4. 公共文件修改契约
 
@@ -109,10 +111,14 @@ git branch --show-current
 git status --short
 ```
 
-共享只读预训练权重：
+共享只读预训练权重。不要把整个 `pretrain` 目录直接做成 symlink，
+因为 Git 会把顶层目录链接视为未跟踪文件；先创建被忽略的真实目录，再链接其内的
+权重子目录：
 
 ```bash
-ln -s ../RT-DETRv4/pretrain pretrain
+mkdir -p pretrain
+ln -s ../../RT-DETRv4/pretrain/hgnetv2 pretrain/hgnetv2
+git check-ignore -v pretrain/hgnetv2
 ```
 
 如果需要读取稳定 O² 日志，只链接这一个基线目录：
