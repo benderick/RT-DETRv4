@@ -91,11 +91,24 @@ class FrameworkContractTest(unittest.TestCase):
         self.assertEqual(LEDGER_RELATIVE, Path("research/ledger"))
         self.assertFalse((ROOT / "docs/research").exists())
         active = set()
+        declared_tools = set()
+        declared_tests = set()
         for manifest_path in (ROOT / "docs/ideas").glob("*/manifest.json"):
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             self.assertEqual(
                 manifest["schema_version"], "research-idea-manifest-v1")
-            active.add(manifest["idea"]["id"])
+            idea = manifest["idea"]
+            idea_id = idea["id"]
+            active.add(idea_id)
+            owned_paths = set(idea["owned_paths"])
+            documentation = f"docs/ideas/{idea_id}"
+            self.assertIn(documentation, owned_paths)
+            if idea["status"] == "candidate":
+                self.assertEqual(owned_paths, {documentation})
+            if f"tools/research/{idea_id}" in owned_paths:
+                declared_tools.add(idea_id)
+            if f"test/research/{idea_id}" in owned_paths:
+                declared_tests.add(idea_id)
         self.assertTrue((ROOT / "engine/rtv4/obb/methods/o2/adr.py").is_file())
         self.assertFalse((ROOT / "configs/research").exists())
         self.assertEqual(
@@ -106,12 +119,12 @@ class FrameworkContractTest(unittest.TestCase):
         self.assertEqual(
             {path.name for path in (ROOT / "test/research").iterdir()
              if path.is_dir() and path.name != "__pycache__"},
-            {"o2", *active},
+            {"o2", *declared_tests},
         )
         self.assertEqual(
             {path.name for path in (ROOT / "tools/research").iterdir()
              if path.is_dir() and path.name != "__pycache__"},
-            {"o2", *active},
+            {"o2", *declared_tools},
         )
         self.assertFalse((ROOT / "参考资料").exists())
         self.assertFalse((ROOT / "项目说明.md").exists())

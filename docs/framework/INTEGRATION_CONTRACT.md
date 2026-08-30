@@ -62,8 +62,9 @@ test/research/<idea>/             # 新 idea 的纯函数、干预不变量和 s
 几何与评估能力不得以数据集名复制注册。
 
 尚未通过证伪阶段的新 idea 不得加入稳定 `refinement_mode`，也不得改变已有模型的
-默认 forward。它必须先在 `docs/ideas/<idea>/`、`tools/research/<idea>/`、
-`test/research/<idea>/` 三个同名目录形成闭环；
+默认 forward。`candidate` 只在 `docs/ideas/<idea>/` 保存命题卡和 manifest；通过
+candidate gate、进入 Stage 0 后，才在 `tools/research/<idea>/` 与
+`test/research/<idea>/` 建立同名的审计/测试闭环；
 多个 idea 并行时不能把协议、实现和结果混放在 O² 复现目录或项目根目录。
 idea 的状态、算力闸门与清退规则必须遵循 `docs/development/IDEA_LIFECYCLE.md`。未经
 candidate gate 不建立实验目录；被证伪的实现不得移动到 archive 继续留在源码树，必须
