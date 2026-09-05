@@ -84,10 +84,10 @@ RotatedRTv4Criterion:
 optimizer:
   type: AdamW
   params:
-    - {params: '^(?=.*backbone)(?!.*norm|bn).*$', lr: 0.000005}
-    - {params: '^(?=.*backbone)(?=.*norm|bn).*$', lr: 0.000005, weight_decay: 0.0}
+    - {params: '^(?=.*backbone)(?!.*norm|bn).*$', lr: 0.00002}
+    - {params: '^(?=.*backbone)(?=.*norm|bn).*$', lr: 0.00002, weight_decay: 0.0}
     - {params: '^(?=.*(?:encoder|decoder))(?=.*(?:norm|bn|bias)).*$', weight_decay: 0.0}
-  lr: 0.00005
+  lr: 0.0002
   betas: [0.9, 0.999]
   weight_decay: 0.0001
 

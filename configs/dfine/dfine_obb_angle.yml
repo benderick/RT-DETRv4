@@ -16,7 +16,7 @@ RotatedRTv4Criterion:
   weight_dict: {
     loss_vfl: 1.0,
     loss_bbox: 5.0,
-    loss_angle: 2.0,
+    loss_angle: 0.0,
     loss_kld: 2.0,
     loss_fgl: 0.15
   }

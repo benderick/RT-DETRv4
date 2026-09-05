@@ -139,7 +139,7 @@ class O2ADRTest(unittest.TestCase):
         })
         criterion = RotatedRTv4Criterion(
             matcher,
-            {"loss_vfl": 1, "loss_bbox": 5, "loss_angle": 5,
+            {"loss_vfl": 1, "loss_bbox": 5, "loss_angle": 0,
              "loss_kld": 2, "loss_fgl": 0.15},
             losses=("vfl", "boxes", "local"),
             alpha=.75, num_classes=3, reg_max=8,
@@ -405,8 +405,8 @@ class O2ConfigurationTest(unittest.TestCase):
             self.assertEqual(config.yaml_cfg["epoches"], 72)
             self.assertEqual(
                 config.yaml_cfg["train_dataloader"]["total_batch_size"], 8)
-            self.assertEqual(optimizer["lr"], 5e-5)
-            self.assertEqual(optimizer["params"][0]["lr"], 5e-6)
+            self.assertEqual(optimizer["lr"], 2e-4)
+            self.assertEqual(optimizer["params"][0]["lr"], 2e-5)
             self.assertEqual(optimizer["weight_decay"], 1e-4)
             self.assertEqual(
                 config.yaml_cfg["lr_scheduler"]["milestones"], [500])
