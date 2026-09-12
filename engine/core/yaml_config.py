@@ -13,6 +13,7 @@ from torch.utils.data import DataLoader
 
 import re
 import copy
+import importlib
 
 from ._config import BaseConfig
 from .workspace import create
@@ -29,6 +30,12 @@ class YAMLConfig(BaseConfig):
 
         cfg = load_config(cfg_path)
         cfg = merge_dict(cfg, kwargs)
+
+        # Opt-in research registrations; ordinary configs import no incubator.
+        for module in cfg.get("imports", []):
+            if not isinstance(module, str) or not module.startswith("engine."):
+                raise ValueError("Config imports must name modules inside engine")
+            importlib.import_module(module)
 
         self.yaml_cfg = copy.deepcopy(cfg)
 

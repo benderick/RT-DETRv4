@@ -1,0 +1,7 @@
+# Freeze recipe/epoch count using development experiments before this run.
+__include__: [./dfine_obb_o2.yml]
+output_dir: ./logs/moda/dfine_obb_o2_fulltrain
+eval_during_training: False
+train_dataloader:
+  dataset:
+    split_file: ~

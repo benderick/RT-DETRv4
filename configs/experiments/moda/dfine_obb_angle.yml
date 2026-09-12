@@ -1,0 +1,2 @@
+__include__: [../../dfine/dfine_obb_angle.yml, ../../dataset/moda_obb.yml, ./runtime.yml]
+output_dir: ./logs/moda/dfine_obb_angle

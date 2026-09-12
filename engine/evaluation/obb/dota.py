@@ -41,7 +41,14 @@ def _average_precision(recall, precision, use_07_metric=False):
 class DotaOBBEvaluator:
     """Evaluate original-image pixel OBBs, respecting DOTA difficulty flags."""
 
-    def __init__(self, dataset, iou_thresholds=None, use_07_metric=True):
+    STAT_NAMES = ("mAP50_75_DOTA07", "AP50_DOTA07", "AP75_DOTA07", "mAP50_95", "AP50", "AP75")
+
+    def __init__(self, dataset, iou_thresholds=None, use_07_metric=True,
+                 selection_metric="mAP50_75_DOTA07"):
+        if selection_metric not in self.STAT_NAMES:
+            raise ValueError(f"Unknown OBB selection_metric: {selection_metric}")
+        self.selection_metric = selection_metric
+        self.selection_index = self.STAT_NAMES.index(selection_metric)
         self.dataset = dataset
         self.iou_thresholds = np.asarray(
             iou_thresholds if iou_thresholds is not None else np.arange(0.5, 0.96, 0.05),
@@ -58,7 +65,8 @@ class DotaOBBEvaluator:
         self.metrics = {}
         self.per_class = {}
         self.per_class_metrics = {}
-        # stats[0] is consumed by DetSolver as the checkpoint-selection metric.
+        # stats[0] remains the default checkpoint metric; selection_index can
+        # explicitly select another metric without changing this vector.
         # Keep it aligned with MMRotate DOTAMetric(iou_thrs=[0.5, 0.75]):
         # DOTA/VOC AP averaged over AP50 and AP75, not COCO AP@[.50:.95].
         self.stats = np.zeros(6, dtype=np.float64)

@@ -125,11 +125,17 @@ class BaseSolver(object):
         self.train_dataloader = dist_utils.warp_loader(
             self.cfg.train_dataloader, shuffle=self.cfg.train_dataloader.shuffle
         )
-        self.val_dataloader = dist_utils.warp_loader(
-            self.cfg.val_dataloader, shuffle=self.cfg.val_dataloader.shuffle
-        )
-
-        self.evaluator = self.cfg.evaluator
+        if not isinstance(self.cfg.eval_during_training, bool):
+            raise ValueError("eval_during_training must be a boolean")
+        if self.cfg.eval_during_training:
+            self.val_dataloader = dist_utils.warp_loader(
+                self.cfg.val_dataloader, shuffle=self.cfg.val_dataloader.shuffle
+            )
+            self.evaluator = self.cfg.evaluator
+        else:
+            if self.train_dataloader.collate_fn.stop_epoch <= self.cfg.epoches:
+                raise ValueError("Training without evaluation cannot reload a best checkpoint at a stage boundary")
+            self.val_dataloader = self.evaluator = None
 
         # NOTE: Instantiating order
         if self.cfg.resume:

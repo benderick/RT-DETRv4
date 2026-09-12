@@ -449,13 +449,21 @@ class O2ConfigurationTest(unittest.TestCase):
                             for head in model.dec_angle_head))
         self.assertEqual(model.dec_bbox_head[0].layers[-1].out_features, 4 * 9)
 
-    def test_uav_recipe_satisfies_the_runtime_training_contract(self):
+    def test_uav_recipe_exposes_existing_tuning_from_frozen_contract(self):
         config = YAMLConfig(str(
             self.ROOT / "configs" / "experiments" / "uav_rod" /
             "dfine_obb_o2.yml"))
         contract = _source_aligned_config_contract(config.yaml_cfg)
-        self.assertEqual(contract["status"], "PASS")
-        self.assertEqual(contract["differences"], {})
+        # Commit 7b5f727 intentionally changed these three recipe values.
+        # A shared mutable load_config default previously let an earlier test
+        # overwrite them in memory, making this audit pass only by test order.
+        # Keep the scientific acceptance contract frozen and expose the drift.
+        self.assertEqual(contract["status"], "FAIL")
+        self.assertEqual(set(contract["differences"]), {
+            "criterion_weights", "base_lr", "backbone_lr"})
+        self.assertEqual(contract["actual"]["base_lr"], 2e-4)
+        self.assertEqual(contract["actual"]["backbone_lr"], 2e-5)
+        self.assertEqual(contract["actual"]["criterion_weights"]["loss_angle"], 0.)
         self.assertTrue(contract["actual"]["auxiliary_training"])
 
         parameter_count = sum(

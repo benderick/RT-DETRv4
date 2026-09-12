@@ -11,6 +11,7 @@ import torch
 import torch.nn as nn
 from PIL import Image
 import torchvision.transforms.functional as TF
+from torchvision.transforms import InterpolationMode
 
 from ...core import register
 from ...rtv4.rotated_box_ops import ANGLE_PERIOD, regularize_rboxes, rbox_to_corners
@@ -22,12 +23,22 @@ def _unpack(sample):
     return sample[0], sample[1], sample[2]
 
 
+def image_size(image):
+    """Width, height for PIL or arbitrary-channel CHW tensors."""
+    if torch.is_tensor(image):
+        if image.ndim != 3:
+            raise ValueError("Rotated image tensors must have shape [C,H,W]")
+        return int(image.shape[-1]), int(image.shape[-2])
+    return image.size
+
+
 def _filter_instances(target, keep):
     count = int(keep.numel())
     image_metadata = {
         "image_id", "idx", "orig_size", "size", "scale_factor", "padding",
         "source_image_size", "tile_origin", "tile_size", "tile_overlap", "tile_step",
         "effective_image_ratio", "source_padding_ltrb",
+        "valid_mask",
     }
     for key, value in list(target.items()):
         if (
@@ -58,16 +69,23 @@ class RotatedResize(nn.Module):
             "bicubic": Image.Resampling.BICUBIC,
             "nearest": Image.Resampling.NEAREST,
         }[interpolation]
+        self.tensor_interpolation = InterpolationMode(interpolation)
 
     def forward(self, sample):
         image, target, dataset = _unpack(sample)
-        old_width, old_height = image.size
+        old_width, old_height = image_size(image)
         canvas_width, canvas_height = self.size
         scale = min(canvas_width / old_width, canvas_height / old_height)
         new_width = max(1, min(canvas_width, round(old_width * scale)))
         new_height = max(1, min(canvas_height, round(old_height * scale)))
         scale_x, scale_y = new_width / old_width, new_height / old_height
-        image = image.resize((new_width, new_height), self.interpolation)
+        if torch.is_tensor(image):
+            image = TF.resize(image, [new_height, new_width], self.tensor_interpolation, antialias=True)
+        else:
+            image = image.resize((new_width, new_height), self.interpolation)
+        if "valid_mask" in target:
+            target["valid_mask"] = TF.resize(target["valid_mask"][None].to(torch.uint8),
+                [new_height, new_width], InterpolationMode.NEAREST)[0].bool()
 
         boxes = target["boxes"].clone()
         if boxes.numel():
@@ -100,14 +118,20 @@ class RotatedPad(nn.Module):
 
     def forward(self, sample):
         image, target, dataset = _unpack(sample)
-        old_width, old_height = image.size
+        old_width, old_height = image_size(image)
         canvas_width, canvas_height = self.size
         if old_width > canvas_width or old_height > canvas_height:
             raise ValueError(
                 "RotatedPad cannot crop an oversized image: "
                 f"image={(old_width, old_height)}, canvas={self.size}")
-        padded = Image.new("RGB", self.size, color=(self.fill,) * 3)
-        padded.paste(image, (0, 0))
+        pad = [0, 0, canvas_width - old_width, canvas_height - old_height]
+        if torch.is_tensor(image):
+            padded = TF.pad(image, pad, fill=self.fill)
+        else:
+            padded = Image.new("RGB", self.size, color=(self.fill,) * 3)
+            padded.paste(image, (0, 0))
+        if "valid_mask" in target:
+            target["valid_mask"] = TF.pad(target["valid_mask"], pad, fill=0)
         target["size"] = torch.tensor(
             [canvas_width, canvas_height], dtype=torch.int64)
         target["padding"] = torch.tensor(
@@ -187,13 +211,17 @@ class RotatedRandomFlip(nn.Module):
         direction = random.choice(self.directions)
         target["aug_flip_code"] = torch.tensor(
             {"horizontal": 1, "vertical": 2, "diagonal": 3}[direction], dtype=torch.int64)
-        width, height = image.size
+        width, height = image_size(image)
         boxes = target["boxes"].clone()
         if direction in {"horizontal", "diagonal"}:
             image = TF.hflip(image)
+            if "valid_mask" in target:
+                target["valid_mask"] = TF.hflip(target["valid_mask"])
             boxes[:, 0] = width - boxes[:, 0]
         if direction in {"vertical", "diagonal"}:
             image = TF.vflip(image)
+            if "valid_mask" in target:
+                target["valid_mask"] = TF.vflip(target["valid_mask"])
             boxes[:, 1] = height - boxes[:, 1]
         if direction == "horizontal":
             boxes[:, 4] = torch.remainder(ANGLE_PERIOD - boxes[:, 4], ANGLE_PERIOD)
@@ -222,11 +250,18 @@ class RotatedRandomRotate(nn.Module):
         degrees = random.uniform(-self.angle_range, self.angle_range)
         target["aug_rotation_degrees"] = torch.tensor(degrees, dtype=torch.float32)
         target["aug_rotation_applied"] = torch.tensor(True)
-        image = image.rotate(degrees, resample=Image.Resampling.BILINEAR,
-                             expand=False, fillcolor=(self.fill,) * 3)
+        if torch.is_tensor(image):
+            image = TF.rotate(image, degrees, InterpolationMode.BILINEAR,
+                              expand=False, fill=self.fill)
+        else:
+            image = image.rotate(degrees, resample=Image.Resampling.BILINEAR,
+                                 expand=False, fillcolor=(self.fill,) * 3)
+        if "valid_mask" in target:
+            target["valid_mask"] = TF.rotate(target["valid_mask"][None].to(torch.uint8),
+                degrees, InterpolationMode.NEAREST, fill=0)[0].bool()
         boxes = target["boxes"].clone()
         if boxes.numel():
-            width, height = image.size
+            width, height = image_size(image)
             radians = math.radians(degrees)
             cos_a, sin_a = math.cos(radians), math.sin(radians)
             # Clone both views before writing the transformed x coordinate.
@@ -251,7 +286,7 @@ class RotatedSanitizeBoxes(nn.Module):
     def forward(self, sample):
         image, target, dataset = _unpack(sample)
         boxes = regularize_rboxes(target["boxes"])
-        width, height = image.size
+        width, height = image_size(image)
         keep = torch.isfinite(boxes).all(dim=1)
         keep &= (boxes[:, 2] >= self.min_size) & (boxes[:, 3] >= self.min_size)
         keep &= (boxes[:, 0] >= 0) & (boxes[:, 0] <= width)
@@ -278,8 +313,12 @@ class RotatedConvertToTensor(nn.Module):
 
     def forward(self, sample):
         image, target, dataset = _unpack(sample)
-        width, height = image.size
-        image = TF.pil_to_tensor(image).float().div_(255.0)
+        width, height = image_size(image)
+        if not torch.is_tensor(image):
+            image = TF.pil_to_tensor(image)
+        if image.dtype != torch.uint8:
+            raise ValueError("RotatedConvertToTensor expects uint8 image data before scaling")
+        image = image.float().div_(255.0)
         boxes = regularize_rboxes(target["boxes"])
         if self.normalize_boxes:
             factor = boxes.new_tensor([width, height, width, height, ANGLE_PERIOD])

@@ -1,0 +1,61 @@
+task: detection
+num_classes: 8
+remap_mscoco_category: False
+class_names: [car, van, truck, bus, tricycle, bike, awning-bike, pedestrian]
+inference_padding_fill: 0
+
+evaluator:
+  type: DotaOBBEvaluator
+  use_07_metric: True
+  selection_metric: mAP50_95
+
+train_dataloader:
+  type: DataLoader
+  dataset:
+    type: MODADetection
+    root: ./data/MODA/train
+    expected_labels: 9156
+    split_file: ./logs/moda/splits/train.json
+    transforms:
+      type: Compose
+      ops:
+        - {type: RotatedResize, size: [1024, 1024]}
+        - {type: RotatedRandomFlip, p: 0.75, directions: [horizontal, vertical, diagonal]}
+        - {type: RotatedRandomRotate, p: 0.5, angle_range: 180, fill: 0}
+        - {type: RotatedSanitizeBoxes, min_size: 1, min_visible: 0.2}
+        - {type: RotatedPad, size: [1024, 1024], fill: 0}
+        - {type: RotatedConvertToTensor, normalize_boxes: True}
+  shuffle: True
+  total_batch_size: 8
+  num_workers: 4
+  drop_last: True
+  collate_fn:
+    type: BatchImageCollateFunction
+    base_size: 1024
+    base_size_repeat: ~
+    stop_epoch: ~
+    mixup_prob: 0.0
+
+val_dataloader:
+  type: DataLoader
+  dataset:
+    type: MODADetection
+    root: ./data/MODA/train
+    expected_labels: 9156
+    split_file: ./logs/moda/splits/dev.json
+    transforms:
+      type: Compose
+      ops:
+        - {type: RotatedResize, size: [1024, 1024]}
+        - {type: RotatedPad, size: [1024, 1024], fill: 0}
+        # Do not remove GT from evaluation (source GT comes from the adapter).
+        - {type: RotatedConvertToTensor, normalize_boxes: True}
+  shuffle: False
+  total_batch_size: 8
+  num_workers: 4
+  drop_last: False
+  collate_fn:
+    type: BatchImageCollateFunction
+    base_size: 1024
+    base_size_repeat: ~
+    stop_epoch: ~

@@ -1,0 +1,26 @@
+# Shared MODA recipe, provisionally 36 epochs; profile before a formal run.
+# Global batch 8 -> 4 images/GPU on two 24-GB devices. Dense DN must be profiled.
+HGNetv2:
+  in_channels: 8
+RotatedDFINETransformer:
+  num_queries: 500
+RotatedPostProcessor:
+  num_top_queries: 500
+  max_detections: 500
+  score_threshold: 0.001
+num_top_queries: 500
+epoches: 36
+lr_scheduler:
+  type: MultiStepLR
+  milestones: [27, 33]
+  gamma: 0.1
+eval_interval: 3
+checkpoint_freq: 3
+diagnostics_detailed_epoch_interval: 12
+diagnostics_layerwise_epoch_interval: 12
+diagnostics_detailed_image_limit: 16
+diagnostics_query_topk: 20
+train_dataloader:
+  total_batch_size: 8
+val_dataloader:
+  total_batch_size: 8

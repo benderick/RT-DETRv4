@@ -16,3 +16,4 @@ from .voc_detection import VOCDetection
 from .voc_eval import VOCEvaluator
 from .codrone_dataset import CODroneDetection, CODRONE_CLASSES
 from .uav_rod_dataset import UAVRODDetection, UAV_ROD_CLASSES
+from .moda_dataset import MODADetection, MODA_CLASSES

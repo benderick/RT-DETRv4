@@ -21,9 +21,11 @@ __all__ = [
 INCLUDE_KEY = '__include__'
 
 
-def load_config(file_path, cfg=dict()):
+def load_config(file_path, cfg=None):
     """load config
     """
+    if cfg is None:
+        cfg = {}
     _, ext = os.path.splitext(file_path)
     assert ext in ['.yml', '.yaml'], "only support yaml files"
 
@@ -107,16 +109,27 @@ def merge_config(cfg, another_cfg=GLOBAL_CONFIG, inplace: bool=False, overwrite:
         model1 = create(cfg1['model'], cfg1)
         model2 = create(cfg2['model'], cfg2)
     """
+    def clone_containers(value):
+        # Registry metadata contains Python modules, which deepcopy cannot
+        # pickle. Copy mutable config containers, preserving module identity.
+        if isinstance(value, dict):
+            return {k: clone_containers(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [clone_containers(v) for v in value]
+        if isinstance(value, tuple):
+            return tuple(clone_containers(v) for v in value)
+        return value
+
     def _merge(dct, another):
         for k in another:
             if k not in dct:
-                dct[k] = another[k]
+                dct[k] = clone_containers(another[k])
 
             elif isinstance(dct[k], dict) and isinstance(another[k], dict):
                 _merge(dct[k], another[k])
 
             elif overwrite:
-                dct[k] = another[k]
+                dct[k] = clone_containers(another[k])
 
         return cfg
 

@@ -24,6 +24,7 @@ class DotaOBBDetection(DetDataset):
     """
 
     __inject__ = ["transforms"]
+    image_suffixes = frozenset({".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"})
 
     def __init__(
         self,
@@ -58,11 +59,7 @@ class DotaOBBDetection(DetDataset):
             raise ValueError("DOTA classes must be non-empty and unique")
         self.class_to_label = {name: index for index, name in enumerate(self.classes)}
         self.class_aliases = dict(class_aliases or {})
-        suffixes = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
-        images = sorted(
-            path for path in self.image_folder.iterdir()
-            if path.is_file() and path.suffix.lower() in suffixes
-        )
+        images = self._find_images()
         if filter_empty_gt:
             images = [
                 path for path in images
@@ -80,6 +77,13 @@ class DotaOBBDetection(DetDataset):
 
     def __len__(self):
         return len(self.images)
+
+    def _find_images(self):
+        return sorted(path for path in self.image_folder.iterdir()
+                      if path.is_file() and path.suffix.lower() in self.image_suffixes)
+
+    def _load_image(self, index):
+        return Image.open(self.images[index]).convert("RGB")
 
     def __getitem__(self, index):
         image, target = self.load_item(index)
@@ -234,8 +238,8 @@ class DotaOBBDetection(DetDataset):
             index += len(self)
         if index < 0 or index >= len(self):
             raise IndexError(index)
-        image = Image.open(self.images[index]).convert("RGB")
-        width, height = image.size
+        image = self._load_image(index)
+        width, height = (image.shape[-1], image.shape[-2]) if torch.is_tensor(image) else image.size
         parsed = self._parse_annotation(index)
         boxes = parsed["boxes"]
         target = {

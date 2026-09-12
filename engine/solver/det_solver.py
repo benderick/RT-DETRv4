@@ -21,13 +21,23 @@ from ..optim.lr_scheduler import FlatCosineLRScheduler
 from ..diagnostics import OBBDiagnostics
 
 
+def checkpoint_selection_score(values, evaluator):
+    """Select a declared metric without changing the public evaluator vector."""
+    index = getattr(evaluator, "selection_index", 0)
+    score = float(values[index])
+    if not math.isfinite(score):
+        raise ValueError("Checkpoint selection metric must be finite")
+    return score
+
+
 class DetSolver(BaseSolver):
 
     def fit(self, ):
         self.train()
         args = self.cfg
         self.diagnostics = OBBDiagnostics(
-            args, self.output_dir, model=getattr(self, "model", None)
+            args, self.output_dir, model=getattr(self, "model", None),
+            train_dataset=getattr(getattr(self, "train_dataloader", None), "dataset", None),
         )
         try:
             return self._fit_with_diagnostics(args)
@@ -36,13 +46,15 @@ class DetSolver(BaseSolver):
 
     def _fit_with_diagnostics(self, args):
         eval_interval = validate_eval_interval(args.eval_interval)
+        evaluate_training = args.eval_during_training
         n_parameters, model_stats = stats(self.cfg)
         print(model_stats)
         print("-"*42 + "Start training" + "-"*43)
-        print(
-            f"Validation interval: every {eval_interval} completed epoch(s); "
-            "the final epoch is always evaluated"
-        )
+        if evaluate_training:
+            print(f"Validation interval: every {eval_interval} completed epoch(s); "
+                  "the final epoch is always evaluated")
+        else:
+            print("Validation disabled: train for the fixed epoch budget and use last.pth")
 
         self.self_lr_scheduler = False
         if args.lrsheduler is not None:
@@ -57,7 +69,7 @@ class DetSolver(BaseSolver):
         top1 = 0
         best_stat = {'epoch': -1, }
         # evaluate again before resume training
-        if self.last_epoch > 0:
+        if self.last_epoch > 0 and evaluate_training:
             module = self.ema.module if self.ema else self.model
             test_stats, coco_evaluator = evaluate(
                 module,
@@ -72,8 +84,8 @@ class DetSolver(BaseSolver):
             )
             for k in test_stats:
                 best_stat['epoch'] = self.last_epoch
-                best_stat[k] = test_stats[k][0]
-                top1 = test_stats[k][0]
+                best_stat[k] = checkpoint_selection_score(test_stats[k], self.evaluator)
+                top1 = best_stat[k]
                 print(f'best_stat: {best_stat}')
 
         best_stat_print = best_stat.copy()
@@ -175,7 +187,7 @@ class DetSolver(BaseSolver):
             stage_boundary = (
                 epoch + 1 == self.train_dataloader.collate_fn.stop_epoch
             )
-            if (
+            if evaluate_training and (
                 should_evaluate_epoch(epoch, args.epoches, eval_interval)
                 or stage_boundary
             ):
@@ -194,16 +206,17 @@ class DetSolver(BaseSolver):
 
                 # TODO
                 for k in test_stats:
+                    selection_score = checkpoint_selection_score(test_stats[k], self.evaluator)
                     if self.writer and dist_utils.is_main_process():
                         for i, v in enumerate(test_stats[k]):
                             self.writer.add_scalar(f'Test/{k}_{i}'.format(k), v, epoch)
 
                     if k in best_stat:
-                        best_stat['epoch'] = epoch if test_stats[k][0] > best_stat[k] else best_stat['epoch']
-                        best_stat[k] = max(best_stat[k], test_stats[k][0])
+                        best_stat['epoch'] = epoch if selection_score > best_stat[k] else best_stat['epoch']
+                        best_stat[k] = max(best_stat[k], selection_score)
                     else:
                         best_stat['epoch'] = epoch
-                        best_stat[k] = test_stats[k][0]
+                        best_stat[k] = selection_score
 
                     if best_stat[k] > top1:
                         best_stat_print['epoch'] = epoch
@@ -219,11 +232,11 @@ class DetSolver(BaseSolver):
 
                     if best_stat['epoch'] == epoch and self.output_dir:
                         if epoch >= self.train_dataloader.collate_fn.stop_epoch:
-                            if test_stats[k][0] > top1:
-                                top1 = test_stats[k][0]
+                            if selection_score > top1:
+                                top1 = selection_score
                                 dist_utils.save_on_master(self.state_dict(), self.output_dir / 'best_stg2.pth')
                         else:
-                            top1 = max(test_stats[k][0], top1)
+                            top1 = max(selection_score, top1)
                             dist_utils.save_on_master(self.state_dict(), self.output_dir / 'best_stg1.pth')
 
                     elif epoch >= self.train_dataloader.collate_fn.stop_epoch:

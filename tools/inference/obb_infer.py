@@ -15,6 +15,8 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from engine.core import YAMLConfig  # noqa: E402
 from engine.data.transforms import RotatedConvertToTensor, RotatedResizePad  # noqa: E402
+from engine.data.transforms.rotated_transforms import image_size  # noqa: E402
+from engine.data.dataset.moda_dataset import load_moda_image  # noqa: E402
 from engine.rtv4.obb_visualization import save_obb_visualization  # noqa: E402
 from engine.rtv4.rotated_box_ops import rbox_to_corners  # noqa: E402
 
@@ -32,7 +34,7 @@ def _images(path):
     path = Path(path)
     if path.is_file():
         return [path]
-    suffixes = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
+    suffixes = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".npy"}
     return sorted(item for item in path.iterdir() if item.suffix.lower() in suffixes)
 
 
@@ -47,16 +49,17 @@ def main():
     args = parser.parse_args()
 
     config = YAMLConfig(args.config)
+    # A full inference checkpoint supplies the backbone too; no download needed.
+    if "HGNetv2" in config.yaml_cfg:
+        config.yaml_cfg["HGNetv2"]["pretrained"] = False
     device = torch.device(args.device)
     model = config.model.to(device).eval()
-    missing, unexpected = model.load_state_dict(_checkpoint_state(args.checkpoint), strict=False)
-    if missing or unexpected:
-        print(f"checkpoint: {len(missing)} missing, {len(unexpected)} unexpected keys")
+    model.load_state_dict(_checkpoint_state(args.checkpoint), strict=True)
     postprocessor = config.postprocessor.to(device).eval()
     if args.score_threshold is not None:
         postprocessor.score_threshold = args.score_threshold
     height, width = config.yaml_cfg.get("eval_spatial_size", [1024, 1024])
-    resize = RotatedResizePad((width, height), fill=114)
+    resize = RotatedResizePad((width, height), fill=config.yaml_cfg.get("inference_padding_fill", 114))
     to_tensor = RotatedConvertToTensor(normalize_boxes=True)
     output_dir = Path(args.output)
     visualization_dir = output_dir / "visualizations"
@@ -64,10 +67,12 @@ def main():
     visualization_dir.mkdir(parents=True, exist_ok=True)
     dota_dir.mkdir(parents=True, exist_ok=True)
 
-    class_names = config.val_dataloader.dataset.classes
+    class_names = config.yaml_cfg.get("class_names")
+    if class_names is None:
+        class_names = config.val_dataloader.dataset.classes
     for image_path in _images(args.input):
-        original = Image.open(image_path).convert("RGB")
-        orig_width, orig_height = original.size
+        original = load_moda_image(image_path) if image_path.suffix.lower() == ".npy" else Image.open(image_path).convert("RGB")
+        orig_width, orig_height = image_size(original)
         target = {
             "boxes": torch.empty((0, 5)), "labels": torch.empty(0, dtype=torch.long),
             "area": torch.empty(0), "difficulty": torch.empty(0, dtype=torch.long),
@@ -76,11 +81,13 @@ def main():
             "size": torch.tensor([orig_width, orig_height]), "scale_factor": torch.ones(2),
             "padding": torch.zeros(4, dtype=torch.long),
         }
+        if torch.is_tensor(original):
+            target["valid_mask"] = torch.ones((orig_height, orig_width), dtype=torch.bool)
         image, target, _ = resize((original, target, None))
         image, target, _ = to_tensor((image, target, None))
         target = {key: value.to(device) for key, value in target.items()}
         with torch.inference_mode():
-            prediction = postprocessor(model(image.unsqueeze(0).to(device)), [target])[0]
+            prediction = postprocessor(model(image.unsqueeze(0).to(device), targets=[target]), [target])[0]
         prediction = {key: value.cpu() for key, value in prediction.items()}
         save_obb_visualization(
             visualization_dir / f"{image_path.stem}.jpg", original,

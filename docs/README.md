@@ -19,6 +19,7 @@
 
 - [CODrone](datasets/codrone/README.md)
 - [UAV-ROD](datasets/uav_rod/README.md)
+- [MODA 八波段数据接入与训练](datasets/moda/README.md)
 - [稳定 OBB 底座验证状态](testing/obb_baseline_report.md)
 
 ## 开发与研究管理

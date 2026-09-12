@@ -290,7 +290,7 @@ class OBBDiagnostics:
     races and preserves every validation sample; analysis tools glob all ranks.
     """
 
-    def __init__(self, cfg, output_dir, model=None):
+    def __init__(self, cfg, output_dir, model=None, train_dataset=None):
         self.enabled = bool(getattr(cfg, "diagnostics_enabled", False))
         self.train_interval = max(1, int(getattr(cfg, "diagnostics_train_interval", 50)))
         self.detailed_image_limit = max(0, int(getattr(cfg, "diagnostics_detailed_image_limit", 32)))
@@ -353,6 +353,9 @@ class OBBDiagnostics:
                 "world_size": self.world_size,
                 "git": _git_metadata(repository),
                 "config": config,
+                "train_dataset_provenance": (
+                    train_dataset.get_dataset_provenance()
+                    if callable(getattr(train_dataset, "get_dataset_provenance", None)) else None),
                 "coordinate_convention": {
                     "model": "[cx/W, cy/H, w/W, h/H, theta/pi], theta in [0,1), long-edge w>=h",
                     "diagnostics": "[cx, cy, w, h, theta] in original-image pixels/radians, theta in [0,pi)",

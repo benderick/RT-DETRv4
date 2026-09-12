@@ -80,6 +80,7 @@ class BaseConfig(object):
         self.print_freq :int = None
         self.checkpoint_freq :int = 1
         self.eval_interval :int = 1
+        self.eval_during_training :bool = True
         self.output_dir :str = None
         self.summary_dir :str = None
         self.device : str = ''

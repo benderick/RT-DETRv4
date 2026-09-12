@@ -731,7 +731,10 @@ def evaluate(model: torch.nn.Module, criterion: torch.nn.Module, postprocessor,
                 diagnostics.needs_layerwise_eval() or capture_attention,
                 capture_attention=capture_attention,
             )
-        outputs = model(samples)
+        if getattr(dist_utils.de_parallel(model), "requires_image_context", False):
+            outputs = model(samples, targets=targets)
+        else:
+            outputs = model(samples)
         forward_end = _synchronize_for_measurement(device, diagnostic_eval)
 
         if 'rbox' in iou_types:

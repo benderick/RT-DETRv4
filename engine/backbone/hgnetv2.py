@@ -441,8 +441,12 @@ class HGNetv2(nn.Module):
                  freeze_at=0,
                  freeze_norm=True,
                  pretrained=True,
-                 local_model_dir='weight/hgnetv2/'):
+                 local_model_dir='weight/hgnetv2/',
+                 in_channels=3):
         super().__init__()
+        if isinstance(in_channels, bool) or not isinstance(in_channels, int) or in_channels <= 0:
+            raise ValueError("in_channels must be a positive integer")
+        self.in_channels = in_channels
         self.use_lab = use_lab
         self.return_idx = return_idx
 
@@ -455,7 +459,7 @@ class HGNetv2(nn.Module):
 
         # stem
         self.stem = StemBlock(
-                in_chs=stem_channels[0],
+                in_chs=in_channels,
                 mid_chs=stem_channels[1],
                 out_chs=stem_channels[2],
                 use_lab=use_lab)
@@ -509,6 +513,13 @@ class HGNetv2(nn.Module):
 
                     print(f"Loaded stage1 {name} HGNetV2 from URL.")
 
+                if self.in_channels != 3:
+                    state = dict(state)
+                    key = 'stem.stem1.conv.weight'
+                    weight = state[key]
+                    if weight.shape[1] != 3:
+                        raise ValueError("HGNetv2 channel migration expects RGB pretrained weights")
+                    state[key] = weight.mean(dim=1, keepdim=True).repeat(1, self.in_channels, 1, 1) * (3.0 / self.in_channels)
                 self.load_state_dict(state)
 
             except (Exception, KeyboardInterrupt) as e:
@@ -517,7 +528,7 @@ class HGNetv2(nn.Module):
                     logging.error(RED + "CRITICAL WARNING: Failed to load pretrained HGNetV2 model" + RESET)
                     logging.error(GREEN + "Please check your network connection. Or download the model manually from " \
                                 + RESET + f"{download_url}" + GREEN + " to " + RESET + f"{local_model_dir}." + RESET)
-                exit()
+                raise RuntimeError("Failed to load pretrained HGNetV2 model") from e
 
 
 

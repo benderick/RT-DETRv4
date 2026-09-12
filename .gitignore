@@ -221,7 +221,11 @@ engine/data/*
 engine/data/dataset/*
 !engine/data/dataset/dota_obb_dataset.py
 !engine/data/dataset/uav_rod_dataset.py
+!engine/data/dataset/moda_dataset.py
 !engine/data/dataset/codrone_tiling.py
+!engine/data/transforms/
+engine/data/transforms/*
+!engine/data/transforms/rotated_transforms.py
 !test/framework/data/
 test/framework/data/*
 !test/framework/data/__init__.py
@@ -229,6 +233,7 @@ test/framework/data/*
 !test/framework/data/test_codrone_tiling.py
 !test/framework/data/test_full_dataset_audit.py
 !test/framework/data/test_uav_rod_data.py
+!test/framework/data/test_moda_data.py
 
 # Local research ledger and paper/reference workspace. Stable method and
 # framework documentation stays tracked under docs/.

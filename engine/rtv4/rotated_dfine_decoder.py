@@ -53,6 +53,7 @@ class RotatedTransformerDecoder(TransformerDecoder):
         angle_head, score_head, query_pos_head, pre_bbox_head, integral, up,
         reg_scale, attn_mask=None, memory_mask=None, dn_meta=None,
         use_adr=False, adr_project=None,
+        geometry_adapter=None, geometry_context=None,
     ):
         output = target
         output_detach = pred_corners_undetach = angle_delta_undetach = 0
@@ -88,8 +89,14 @@ class RotatedTransformerDecoder(TransformerDecoder):
 
             # Both supported variants retain D-FINE's fixed-anchor,
             # cumulative-logit refinement semantics.
+            geometry_output = output
+            if geometry_adapter is not None:
+                residual = geometry_adapter(output, ref_points_detach, geometry_context, index)
+                if residual.shape != output.shape:
+                    raise ValueError("Geometry adapter residual must have the same shape as query features")
+                geometry_output = output + residual
             pred_corners = (
-                bbox_head[index](output + output_detach)
+                bbox_head[index](geometry_output + output_detach)
                 + pred_corners_undetach
             )
             if use_adr:
@@ -102,7 +109,7 @@ class RotatedTransformerDecoder(TransformerDecoder):
             else:
                 refined_xywh = distance2bbox(
                     initial_ref[..., :4], integral(pred_corners, project), reg_scale)
-                angle_delta = angle_head[index](output + output_detach) + angle_delta_undetach
+                angle_delta = angle_head[index](geometry_output + output_detach) + angle_delta_undetach
                 refined_angle = torch.remainder(
                     initial_ref[..., 4:5] + 0.25 * torch.tanh(angle_delta), 1.0)
                 refined_box = regularize_rboxes(
@@ -145,7 +152,7 @@ class RotatedTransformerDecoder(TransformerDecoder):
 class RotatedDFINETransformer(DFINETransformer):
     """D-FINE OBB decoder supporting direct-angle and O² ADR refinement."""
 
-    __inject__ = ["denoising_builder"]
+    __inject__ = ["denoising_builder", "geometry_adapter"]
 
     def __init__(
         self, num_classes=80, hidden_dim=256, num_queries=300,
@@ -164,6 +171,7 @@ class RotatedDFINETransformer(DFINETransformer):
         ocd_lambda5=0.3, ocd_lambda6=0.6,
         ocd_crowded_policy="strict_budget_random",
         denoising_builder=None,
+        geometry_adapter=None,
     ):
         # Base initialization mutates feat_strides when extra levels are used;
         # keep configuration-owned lists immutable across repeated test builds.
@@ -195,6 +203,11 @@ class RotatedDFINETransformer(DFINETransformer):
         if denoising_builder is not None and not callable(denoising_builder):
             raise TypeError("denoising_builder must be callable or None")
         self.denoising_builder = denoising_builder
+        if geometry_adapter is not None and not isinstance(geometry_adapter, nn.Module):
+            raise TypeError("geometry_adapter must be a torch module or None")
+        if geometry_adapter is not None and layer_scale != 1:
+            raise ValueError("Geometry adapters currently require layer_scale=1")
+        self.geometry_adapter = geometry_adapter
         self.ocd_lambdas = (
             float(ocd_lambda1), float(ocd_lambda2), float(ocd_lambda3),
             float(ocd_lambda4), float(ocd_lambda5), float(ocd_lambda6),
@@ -291,6 +304,7 @@ class RotatedDFINETransformer(DFINETransformer):
         spatial_shapes,
         attention_mask,
         dn_meta,
+        context=None,
     ):
         """Run the shared direct-angle/O² decoder."""
 
@@ -301,6 +315,8 @@ class RotatedDFINETransformer(DFINETransformer):
             attn_mask=attention_mask, dn_meta=dn_meta,
             use_adr=self.use_adr,
             adr_project=self.adr_project if self.use_adr else None,
+            geometry_adapter=self.geometry_adapter,
+            geometry_context=context,
         )
 
     def _build_denoising_group(self, targets):
@@ -334,7 +350,15 @@ class RotatedDFINETransformer(DFINETransformer):
             if builder is None else builder(**arguments)
         )
 
-    def forward(self, feats, targets=None):
+    def build_context(self, images, targets=None):
+        if self.geometry_adapter is None:
+            return None
+        return self.geometry_adapter.build_context(images, targets,
+            diagnostics=bool(self.decoder.diagnostic_mode))
+
+    def forward(self, feats, targets=None, context=None):
+        if self.geometry_adapter is not None and context is None:
+            raise ValueError("An enabled geometry adapter requires image context from RTv4")
         memory, spatial_shapes = self._get_encoder_input(feats)
         if self.training and self.num_denoising > 0:
             dn_logits, dn_boxes, attention_mask, dn_meta = \
@@ -367,7 +391,7 @@ class RotatedDFINETransformer(DFINETransformer):
         (out_boxes, out_logits, out_corners, out_refs, pre_boxes, pre_logits,
          out_raw_logits, out_lqe_delta, out_input_refs) = \
             self._decode_queries(
-            content, refs, memory, spatial_shapes, attention_mask, dn_meta
+            content, refs, memory, spatial_shapes, attention_mask, dn_meta, context=context
         )
 
         if self.training and dn_meta is not None:
@@ -439,6 +463,8 @@ class RotatedDFINETransformer(DFINETransformer):
                         layer.cross_attn.last_attention_weights for layer in active_layers])
                     result["diagnostic_sampling_points_per_level"] = tuple(
                         active_layers[0].cross_attn.num_points_list)
+            if self.geometry_adapter is not None and self.decoder.diagnostic_mode:
+                result["diagnostic_query_extensions"] = self.geometry_adapter.diagnostics(context)
             return result
         if self.aux_loss:
             result["aux_outputs"] = self._set_aux_loss2(
