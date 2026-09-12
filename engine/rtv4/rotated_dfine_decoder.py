@@ -172,9 +172,13 @@ class RotatedDFINETransformer(DFINETransformer):
         ocd_crowded_policy="strict_budget_random",
         denoising_builder=None,
         geometry_adapter=None,
+        box_coordinate_mode="per_axis",
     ):
         # Base initialization mutates feat_strides when extra levels are used;
         # keep configuration-owned lists immutable across repeated test builds.
+        if box_coordinate_mode not in {"per_axis", "isotropic"}:
+            raise ValueError("Unknown box_coordinate_mode")
+        self.box_coordinate_mode = box_coordinate_mode
         feat_channels, feat_strides = list(feat_channels), list(feat_strides)
         super().__init__(
             num_classes=num_classes, hidden_dim=hidden_dim, num_queries=num_queries,
@@ -190,6 +194,8 @@ class RotatedDFINETransformer(DFINETransformer):
         self.decoder.__class__ = RotatedTransformerDecoder
         self.decoder.diagnostic_mode = False
         self.decoder.diagnostic_attention_mode = False
+        for layer in self.decoder.layers:
+            layer.cross_attn.box_coordinate_mode = box_coordinate_mode
         refinement_mode = str(refinement_mode)
         supported_modes = {"direct_angle", "o2_adr"}
         if refinement_mode not in supported_modes:
@@ -208,6 +214,8 @@ class RotatedDFINETransformer(DFINETransformer):
         if geometry_adapter is not None and layer_scale != 1:
             raise ValueError("Geometry adapters currently require layer_scale=1")
         self.geometry_adapter = geometry_adapter
+        if geometry_adapter is not None and getattr(geometry_adapter, "box_coordinate_mode", box_coordinate_mode) != box_coordinate_mode:
+            raise ValueError("Geometry adapter and decoder box coordinates must agree")
         self.ocd_lambdas = (
             float(ocd_lambda1), float(ocd_lambda2), float(ocd_lambda3),
             float(ocd_lambda4), float(ocd_lambda5), float(ocd_lambda6),
@@ -262,6 +270,10 @@ class RotatedDFINETransformer(DFINETransformer):
                 torch.arange(height, device=device), torch.arange(width, device=device), indexing="ij")
             xy = (torch.stack((grid_x, grid_y), -1).unsqueeze(0) + 0.5) / \
                 torch.tensor([width, height], dtype=dtype, device=device)
+            if self.box_coordinate_mode == "isotropic":
+                # Grid centers in an isotropic model plane; proposal side
+                # lengths below are fractions of the longest canvas side.
+                xy = xy * xy.new_tensor([width, height]) / max(width, height)
             wh = torch.ones_like(xy) * grid_size * (2.0 ** level)
             angle = torch.full_like(xy[..., :1], 0.5)
             anchors.append(torch.cat((xy, wh, angle), -1).reshape(1, height * width, 5))

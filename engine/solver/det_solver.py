@@ -124,7 +124,7 @@ class DetSolver(BaseSolver):
             self.diagnostics.record_train_epoch(epoch, train_stats)
 
             if not self.self_lr_scheduler:  # update by epoch 
-                if self.lr_warmup_scheduler is None or self.lr_warmup_scheduler.finished():
+                if self.lr_warmup_scheduler is None or self.lr_warmup_scheduler.finished() or getattr(self.lr_scheduler,"advance_during_warmup",False):
                     self.lr_scheduler.step()
 
             self.last_epoch += 1

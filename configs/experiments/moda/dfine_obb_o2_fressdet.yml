@@ -1,0 +1,2 @@
+__include__: [./dfine_obb_o2.yml, ./fressdet_paper_protocol.yml]
+output_dir: ./logs/moda/dfine_obb_o2_fressdet

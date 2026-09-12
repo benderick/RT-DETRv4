@@ -19,6 +19,8 @@ def main():
     parser.add_argument("--debug-split", help="Explicit hashed subset; never inferred from missing data")
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--size", type=int, default=128)
+    parser.add_argument("--height", type=int, help="Override square size with a rectangular canvas")
+    parser.add_argument("--width", type=int, help="Override square size with a rectangular canvas")
     parser.add_argument("--queries", type=int, default=64)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--steps", type=int, default=3)
@@ -26,7 +28,8 @@ def main():
     parser.add_argument("--dense", action="store_true", help="Use images with the most source objects")
     parser.add_argument("--output", type=Path, default=Path("logs/moda/preflight.json"))
     args = parser.parse_args()
-    if args.size < 64 or args.size % 32 or min(args.queries, args.batch_size, args.steps) < 1:
+    height, width = args.height or args.size, args.width or args.size
+    if min(height, width) < 64 or height % 32 or width % 32 or min(args.queries, args.batch_size, args.steps) < 1:
         parser.error("size must be a multiple of 32 >=64; other counts must be positive")
     device = torch.device(args.device)
     if args.amp and device.type != "cuda":
@@ -34,16 +37,16 @@ def main():
     torch.manual_seed(42)
     random.seed(42)
     np.random.seed(42)
-    cfg = YAMLConfig(args.config, eval_spatial_size=[args.size, args.size],
+    cfg = YAMLConfig(args.config, eval_spatial_size=[height, width],
                      use_amp=args.amp, RotatedDFINETransformer={"num_queries": args.queries})
     spec = cfg.yaml_cfg["train_dataloader"]["dataset"]
     if args.debug_split:
         spec["split_file"] = args.debug_split
     for operation in spec["transforms"]["ops"]:
         if operation["type"] in ("RotatedResize", "RotatedPad"):
-            operation["size"] = [args.size, args.size]
+            operation["size"] = [width, height]
     cfg.yaml_cfg["train_dataloader"].update(total_batch_size=args.batch_size, num_workers=0)
-    cfg.yaml_cfg["train_dataloader"]["collate_fn"].update(base_size=args.size)
+    cfg.yaml_cfg["train_dataloader"]["collate_fn"].update(base_size=[height, width])
     dataset = cfg.train_dataloader.dataset
     indices = list(range(len(dataset)))
     if args.dense:
@@ -106,6 +109,7 @@ def main():
     if device.type == "cuda":
         torch.cuda.synchronize(device)
     report = dict(config=args.config, device=str(device), amp=args.amp, size=args.size,
+                  canvas_height=height, canvas_width=width,
                   queries=args.queries, batch_size=args.batch_size, steps=steps,
                   elapsed_seconds=time.perf_counter()-start,
                   scope="code_smoke_only_not_accuracy_or_training_time_estimate",

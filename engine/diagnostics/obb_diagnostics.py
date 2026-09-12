@@ -143,7 +143,7 @@ def _restore_target_boxes(target):
     boxes = target["boxes"].detach().clone()
     if not len(boxes):
         return boxes
-    size = target["size"].to(device=boxes.device, dtype=boxes.dtype)
+    size = target.get("box_normalization_size", target["size"]).to(device=boxes.device, dtype=boxes.dtype)
     scale = target.get("scale_factor", torch.ones(2, device=boxes.device)).to(
         device=boxes.device, dtype=boxes.dtype)
     padding = target.get("padding", torch.zeros(4, device=boxes.device)).to(
@@ -357,7 +357,8 @@ class OBBDiagnostics:
                     train_dataset.get_dataset_provenance()
                     if callable(getattr(train_dataset, "get_dataset_provenance", None)) else None),
                 "coordinate_convention": {
-                    "model": "[cx/W, cy/H, w/W, h/H, theta/pi], theta in [0,1), long-edge w>=h",
+                    "model": ("[cx/S, cy/S, w/S, h/S, theta/pi], S=max(W,H)" if decoder_config.get("box_coordinate_mode") == "isotropic"
+                              else "[cx/W, cy/H, w/W, h/H, theta/pi], theta in [0,1), long-edge w>=h"),
                     "diagnostics": "[cx, cy, w, h, theta] in original-image pixels/radians, theta in [0,pi)",
                     "angle_error": "shortest half-turn-periodic unsigned distance in degrees",
                 },

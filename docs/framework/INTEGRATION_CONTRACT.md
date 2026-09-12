@@ -77,12 +77,17 @@ candidate 阶段不建立实验目录；证据不足时可以换用更忠实的 
 
 ## 3. OBB 坐标契约
 
-模型内部统一使用：
+默认配置的模型内部使用：
 
 ```text
 [cx/W, cy/H, w/W, h/H, theta/pi]
 w >= h, theta in [0, 1)
 ```
+
+矩形画布的实验可显式设置 `box_coordinate_mode: isotropic`，使用
+`[cx/S, cy/S, w/S, h/S, theta/pi]`，其中 `S=max(W,H)`。transform 在 target 中
+保存 `box_normalization_size=[S,S]`；anchors、旋转 attention、geometry adapter 和
+原图恢复必须共同遵守该选择。稳定默认配置及其 checkpoint 参数树保持原状。
 
 图像空间日志和求值统一使用像素中心、像素边长及弧度角。所有入口必须显式处理：
 
@@ -104,8 +109,10 @@ w >= h, theta in [0, 1)
 4. 数据 provenance，包括 root、split 和 inventory hash；
 5. 数据单元测试与 perfect-prediction evaluator 测试。
 
-DOTA 兼容数据集必须复用 `DotaOBBEvaluator`；切片求值复用
-`MergedDotaOBBEvaluator`。禁止创建 `<DatasetName>Evaluator` 来复制同一指标逻辑。
+DOTA 指标复用 `DotaOBBEvaluator`；切片求值复用 `MergedDotaOBBEvaluator`。
+显式采用 Ultralytics OBB 指标时使用通用 `BenchmarkOBBEvaluator`，其 ProbIoU 匹配、
+插值积分、完整性检查和选择指标由协议决定，不绑定某个数据集。
+禁止创建 `<DatasetName>Evaluator` 来复制同一指标逻辑。
 
 ## 5. 新模型、损失和模块
 
@@ -148,12 +155,16 @@ DOTA 兼容数据集必须复用 `DotaOBBEvaluator`；切片求值复用
 冻结输出上按调用覆盖，但不能把 NMS-free 与 NMS 的指标混报。tile 评估器必须检查
 tile 完整性，不能用缺失 tile 的结果静默计算 AP。
 
-至少报告：
+默认 DOTA 协议至少报告：
 
 - DOTA-07 AP50/AP75 与主汇总；
 - diagnostic mAP@[.50:.95]；
 - per-class AP；
 - 候选数、NMS 抑制关系和最终检测来源。
+
+`BenchmarkOBBEvaluator` 则记录 ProbIoU 的 AP50/AP75/mAP@[.50:.95]、同样积分方式
+下的几何 IoU 诊断、per-class AP 与选择指标。显式配方可选择
+`nms_method: probiou_fast`；该模式的重叠阈值和抑制链按 fast NMS 解释。
 
 ## 8. 诊断日志
 

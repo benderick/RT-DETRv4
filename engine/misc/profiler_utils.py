@@ -12,7 +12,8 @@ def stats(
 
     base_size = cfg.train_dataloader.collate_fn.base_size
     channels = getattr(cfg.model.backbone, 'in_channels', 3)
-    input_shape = (1, channels, base_size, base_size)
+    height, width = (base_size, base_size) if isinstance(base_size, int) else base_size
+    input_shape = (1, channels, height, width)
 
     model_for_info = copy.deepcopy(cfg.model).deploy()
 

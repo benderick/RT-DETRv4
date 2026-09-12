@@ -152,6 +152,10 @@ class MSDeformableAttention(nn.Module):
                 angle = reference_points[:, :, None, :, 4:5] * math.pi
                 offset = rotate_sampling_offsets(offset, angle / math.pi)
             sampling_locations = reference_points[:, :, None, :, :2] + offset
+            if getattr(self, "box_coordinate_mode", "per_axis") == "isotropic":
+                height, width = value_spatial_shapes[0]
+                aspect = sampling_locations.new_tensor([width, height]) / max(width, height)
+                sampling_locations = sampling_locations / aspect
         else:
             raise ValueError(
                 "Last dim of reference_points must be 2, 4 or 5, but get {} instead.".

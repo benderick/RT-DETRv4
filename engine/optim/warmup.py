@@ -4,6 +4,7 @@ Copyright(c) 2023 lyuwenyu. All Rights Reserved.
 """
 
 from torch.optim.lr_scheduler import LRScheduler
+from torch.optim.lr_scheduler import LambdaLR
 
 from ..core import register
 
@@ -46,3 +47,32 @@ class LinearWarmup(Warmup):
 
     def get_warmup_factor(self, step):
         return min(1.0, (step + 1) / self.warmup_duration)
+
+
+@register()
+class LinearEpochLR(LambdaLR):
+    """Epoch-indexed linear decay; advance even while batch warmup is active."""
+    advance_during_warmup = True
+
+    def __init__(self, optimizer, total_epochs=20, final_ratio=.01, last_epoch=-1):
+        if total_epochs < 1 or not 0 < final_ratio <= 1:
+            raise ValueError("Invalid linear epoch schedule")
+        super().__init__(optimizer,lambda epoch: max(1-epoch/total_epochs,0)*(1-final_ratio)+final_ratio,last_epoch)
+
+
+@register()
+class GroupLinearWarmup(Warmup):
+    """Interpolate each group's declared start LR to its current epoch LR."""
+    def step(self):
+        self.last_step += 1
+        self.prepare_step()
+
+    def prepare_step(self):
+        # Epoch schedulers overwrite group LRs at epoch boundaries. Reapply
+        # the current batch's interpolation before its optimizer update.
+        if self.last_step > self.warmup_duration:
+            return
+        factor = self.last_step / max(1,self.warmup_duration)
+        for group, scheduled in zip(self.lr_scheduler.optimizer.param_groups,self.lr_scheduler.get_last_lr()):
+            start = group.get("warmup_start_lr",0.)
+            group["lr"] = start + factor*(scheduled-start)

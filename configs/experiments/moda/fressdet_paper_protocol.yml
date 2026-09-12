@@ -1,0 +1,86 @@
+# Paper-first benchmark: MODA 9156/4885, 20 epochs, W1216 x H928, global batch8.
+# This is an explicit benchmark recipe; validation here is the official test split.
+epoches: 20
+eval_spatial_size: [928, 1216]
+inference_resize_size: [1200, 900]
+inference_padding_fill: 0
+eval_during_training: True
+eval_interval: 1
+checkpoint_freq: 1
+seed: 0
+use_amp: False
+use_ema: True
+clip_max_norm: 10.0
+HGNetv2:
+  pretrained: False
+  freeze_at: -1
+  freeze_norm: False
+RotatedDFINETransformer:
+  num_queries: 500
+  box_coordinate_mode: isotropic
+num_top_queries: 4000
+RotatedPostProcessor:
+  num_top_queries: 4000
+  score_threshold: 0.01
+  max_detections: 300
+  apply_nms: True
+  nms_method: probiou_fast
+  nms_iou_threshold: 0.7
+evaluator:
+  __replace__: True
+  type: BenchmarkOBBEvaluator
+  selection_metric: AP50
+  require_complete: True
+optimizer:
+  type: AdamW
+  lr: 0.01
+  betas: [0.937, 0.999]
+  weight_decay: 0.0005
+  params:
+    - {params: '.*bias$', weight_decay: 0.0, warmup_start_lr: 0.1}
+    - {params: '^(?!.*bias$).*$', module_pattern: 'Norm', weight_decay: 0.0, warmup_start_lr: 0.0}
+    - {params: '^(?!.*bias$).*$', exclude_module_pattern: 'Norm', warmup_start_lr: 0.0}
+lr_scheduler:
+  __replace__: True
+  type: LinearEpochLR
+  total_epochs: 20
+  final_ratio: 0.01
+lr_warmup_scheduler:
+  type: GroupLinearWarmup
+  warmup_duration: 3435 # 3 * ceil(9156/8), including the final partial batch
+ema:
+  decay: 0.9999
+  warmups: 2000
+diagnostics_detailed_epoch_interval: 5
+diagnostics_layerwise_epoch_interval: 5
+train_dataloader:
+  total_batch_size: 8
+  drop_last: False
+  dataset:
+    root: ./data/MODA/train
+    expected_labels: 9156
+    split_file: ~
+    transforms:
+      type: Compose
+      ops:
+        - {type: RotatedResize, size: [1200, 900]}
+        - {type: RotatedPad, size: [1216, 928], fill: 0}
+        - {type: RotatedConvertToTensor, normalize_boxes: True, box_coordinate_mode: isotropic}
+  collate_fn:
+    base_size: [928, 1216]
+    base_size_repeat: ~
+val_dataloader:
+  total_batch_size: 8
+  dataset:
+    root: ./data/MODA/test
+    expected_labels: 4885
+    split_file: ~
+    transforms:
+      type: Compose
+      ops:
+        - {type: RotatedResize, size: [1200, 900]}
+        - {type: RotatedPad, size: [1216, 928], fill: 0}
+        - {type: RotatedConvertToTensor, normalize_boxes: True, box_coordinate_mode: isotropic}
+  collate_fn:
+    base_size: [928, 1216]
+    base_size_repeat: ~

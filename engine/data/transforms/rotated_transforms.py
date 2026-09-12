@@ -307,9 +307,12 @@ class RotatedSanitizeBoxes(nn.Module):
 
 @register()
 class RotatedConvertToTensor(nn.Module):
-    def __init__(self, normalize_boxes=True):
+    def __init__(self, normalize_boxes=True, box_coordinate_mode="per_axis"):
         super().__init__()
         self.normalize_boxes = normalize_boxes
+        if box_coordinate_mode not in {"per_axis", "isotropic"}:
+            raise ValueError("Unknown box_coordinate_mode")
+        self.box_coordinate_mode = box_coordinate_mode
 
     def forward(self, sample):
         image, target, dataset = _unpack(sample)
@@ -321,6 +324,9 @@ class RotatedConvertToTensor(nn.Module):
         image = image.float().div_(255.0)
         boxes = regularize_rboxes(target["boxes"])
         if self.normalize_boxes:
+            if self.box_coordinate_mode == "isotropic":
+                width = height = max(width, height)
+                target["box_normalization_size"] = torch.tensor([width, height])
             factor = boxes.new_tensor([width, height, width, height, ANGLE_PERIOD])
             boxes = boxes / factor
             boxes = regularize_rboxes(boxes, normalized_angle=True)

@@ -56,9 +56,15 @@ CUDA_VISIBLE_DEVICES=3 python train.py -c configs/dfine/dfine_obb_angle.yml
 | 五参数 L1 | 原始归一化参数差 | 公开 O² 训练语义；角度边界局限单独诊断 |
 | 六值解码 | 四边 HBox + 两个顶点偏移 + 等对角线矩形闭合 | 论文定义与标准 midpoint/gliding-vertex 几何共同确定 |
 
-训练几何增强固定为 `resize -> flip -> rotate -> sanitize -> pad -> tensor`。
+默认训练几何增强为 `resize -> flip -> rotate -> sanitize -> pad -> tensor`。
 `pad` 必须晚于 `rotate`：对非正方形原图先补成方形再旋转会改变旋转中心和有效图像
 边界，不属于公开 O² 训练语义。正式 recipe 不使用光度增强、Mosaic 或 MixUp。
+
+数据集 benchmark 配方可以显式选择无随机增强；例如 MODA 的 FressDet 论文设置
+仅采用 `resize -> pad -> tensor`，详见
+[MODA 配方](../datasets/moda/fressdet_alignment.md)。该矩形画布入口统一以最长边归一化
+OBB 的中心和边长，旋转 attention 再转换到特征图各轴的采样坐标；坐标选项及元数据
+要求见 [集成契约](INTEGRATION_CONTRACT.md)。
 
 `num_denoising: 100` 与 D-FINE、已公开 O² 的字段语义一致：它是正负展开前的动态分组基数，实际 DN query 名义数量为 200。`released_dynamic` 会优先保留每个 GT；若单图 GT 数超过 100，至少保留一组正负样本，实际数量会超过 200。需要硬上限时才使用 `strict_budget_random`，且日志会同时记录 group base、名义/实际 query 数和被保留/丢弃的 GT 索引。
 

@@ -1,5 +1,9 @@
 # MODA 八波段旋转检测
 
+当前主实验采用 [FressDet 论文设置配方](fressdet_alignment.md)：完整 train/test、
+20 epochs、宽 1216 × 高 928、全局 batch8、从头训练，以及发布代码的 ProbIoU AP。
+下文的 36 轮 train/dev 配方保留为开发入口，使用独立配置与日志目录。
+
 适配器：[moda_dataset.py](../../../engine/data/dataset/moda_dataset.py)。稳定入口：
 [O²](../../../configs/experiments/moda/dfine_obb_o2.yml)、
 [direct-angle](../../../configs/experiments/moda/dfine_obb_angle.yml)。
@@ -24,7 +28,8 @@
 
 ## 分割
 
-MODA 没有独立官方开发集。开发阶段从 train 划分 train/dev，test 仅用于最终评估。
+MODA 没有独立官方开发集。以下开发入口从 train 划分 train/dev，test 用于最终评估；
+上面的 FressDet benchmark 入口采用完整官方 train/test。
 推荐提供 JSON `{image_stem: verified_scene_group}`，覆盖所有训练标签：
 
 ```bash

@@ -171,9 +171,22 @@ class YAMLConfig(BaseConfig):
 
         param_groups = []
         visited = []
+        module_types = {}
+        if any('module_pattern' in pg or 'exclude_module_pattern' in pg for pg in cfg['params']):
+            for module_name, module in model.named_modules():
+                for name, _ in module.named_parameters(recurse=False):
+                    full_name = f'{module_name}.{name}' if module_name else name
+                    module_types[full_name] = type(module).__name__
         for pg in cfg['params']:
             pattern = pg['params']
-            params = {k: v for k, v in model.named_parameters() if v.requires_grad and len(re.findall(pattern, k)) > 0}
+            module_pattern = pg.pop('module_pattern', None)
+            exclude_module_pattern = pg.pop('exclude_module_pattern', None)
+            params = {
+                k: v for k, v in model.named_parameters()
+                if v.requires_grad and re.search(pattern, k)
+                and (module_pattern is None or re.search(module_pattern, module_types[k]))
+                and (exclude_module_pattern is None or not re.search(exclude_module_pattern, module_types[k]))
+            }
             pg['params'] = params.values()
             param_groups.append(pg)
             visited.extend(list(params.keys()))

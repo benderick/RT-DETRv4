@@ -15,6 +15,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from engine.core import YAMLConfig  # noqa: E402
 from engine.data.transforms import RotatedConvertToTensor, RotatedResizePad  # noqa: E402
+from engine.data.transforms import RotatedResize, RotatedPad  # noqa: E402
 from engine.data.transforms.rotated_transforms import image_size  # noqa: E402
 from engine.data.dataset.moda_dataset import load_moda_image  # noqa: E402
 from engine.rtv4.obb_visualization import save_obb_visualization  # noqa: E402
@@ -60,7 +61,8 @@ def main():
         postprocessor.score_threshold = args.score_threshold
     height, width = config.yaml_cfg.get("eval_spatial_size", [1024, 1024])
     resize = RotatedResizePad((width, height), fill=config.yaml_cfg.get("inference_padding_fill", 114))
-    to_tensor = RotatedConvertToTensor(normalize_boxes=True)
+    to_tensor = RotatedConvertToTensor(normalize_boxes=True,
+        box_coordinate_mode=getattr(model.decoder, "box_coordinate_mode", "per_axis"))
     output_dir = Path(args.output)
     visualization_dir = output_dir / "visualizations"
     dota_dir = output_dir / "dota"
@@ -83,7 +85,11 @@ def main():
         }
         if torch.is_tensor(original):
             target["valid_mask"] = torch.ones((orig_height, orig_width), dtype=torch.bool)
-        image, target, _ = resize((original, target, None))
+        if "inference_resize_size" in config.yaml_cfg:
+            image, target, _ = RotatedResize(config.yaml_cfg["inference_resize_size"])((original,target,None))
+            image, target, _ = RotatedPad((width,height),fill=config.yaml_cfg.get("inference_padding_fill",114))((image,target,None))
+        else:
+            image, target, _ = resize((original, target, None))
         image, target, _ = to_tensor((image, target, None))
         target = {key: value.to(device) for key, value in target.items()}
         with torch.inference_mode():

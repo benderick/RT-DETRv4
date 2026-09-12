@@ -17,7 +17,7 @@ class RotatedPostProcessor(nn.Module):
 
     def __init__(self, num_classes=12, use_focal_loss=True, num_top_queries=1000,
                  score_threshold=0.05, nms_iou_threshold=0.1, max_detections=500,
-                 apply_nms=True):
+                 apply_nms=True, nms_method="geometric"):
         super().__init__()
         self.num_classes = int(num_classes)
         self.use_focal_loss = use_focal_loss
@@ -26,12 +26,15 @@ class RotatedPostProcessor(nn.Module):
         self.nms_iou_threshold = float(nms_iou_threshold)
         self.max_detections = int(max_detections)
         self.apply_nms = bool(apply_nms)
+        if nms_method not in {"geometric", "probiou_fast"}:
+            raise ValueError("Unknown rotated nms_method")
+        self.nms_method = nms_method
         self.deploy_mode = False
 
     @staticmethod
     def _metadata(target_info, device, dtype):
         if isinstance(target_info, (list, tuple)) and target_info and isinstance(target_info[0], dict):
-            canvas = torch.stack([target["size"] for target in target_info]).to(device=device, dtype=dtype)
+            canvas = torch.stack([target.get("box_normalization_size", target["size"]) for target in target_info]).to(device=device, dtype=dtype)
             scale = torch.stack([target["scale_factor"] for target in target_info]).to(device=device, dtype=dtype)
             padding = torch.stack([target["padding"] for target in target_info]).to(device=device, dtype=dtype)
         else:
@@ -63,6 +66,12 @@ class RotatedPostProcessor(nn.Module):
         2=max_detections.  The expensive overlap trace is only requested by
         diagnostic evaluation; normal inference keeps the original fast path.
         """
+        if self.nms_method == "probiou_fast":
+            from ..evaluation.obb.benchmark import probiou_fast_nms
+            keep_all,status,parent,parent_iou = probiou_fast_nms(boxes,scores,labels,self.nms_iou_threshold)
+            keep = keep_all[:self.max_detections]
+            status[keep_all[self.max_detections:]] = 2
+            return keep,keep_all,status,parent,parent_iou
         keep_all = class_aware_rotated_nms(
             boxes, scores, labels, self.nms_iou_threshold, max_output=None)
         keep = keep_all[:self.max_detections]
@@ -123,12 +132,15 @@ class RotatedPostProcessor(nn.Module):
         diagnostics = []
         for batch_index, (image_boxes, image_scores, image_labels, image_queries) in enumerate(
                 zip(boxes, scores, labels, query_indices)):
-            valid = image_scores >= self.score_threshold
+            valid = (image_scores > self.score_threshold if self.nms_method == "probiou_fast"
+                     else image_scores >= self.score_threshold)
             image_boxes, image_scores, image_labels, image_queries = (
                 image_boxes[valid], image_scores[valid], image_labels[valid], image_queries[valid])
             if len(image_boxes) and apply_nms and return_diagnostics:
                 keep, keep_all, status, parent, parent_iou = self._nms_trace(
                     image_boxes, image_scores, image_labels)
+            elif len(image_boxes) and apply_nms and self.nms_method == "probiou_fast":
+                keep,keep_all,status,parent,parent_iou = self._nms_trace(image_boxes,image_scores,image_labels)
             elif len(image_boxes) and apply_nms:
                 keep = class_aware_rotated_nms(
                     image_boxes, image_scores, image_labels, self.nms_iou_threshold,

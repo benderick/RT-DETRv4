@@ -55,7 +55,9 @@ def merge_dict(dct, another_dct, inplace=True) -> Dict:
     """
     def _merge(dct, another) -> Dict:
         for k in another:
-            if (k in dct and isinstance(dct[k], dict) and isinstance(another[k], dict)):
+            if isinstance(another[k], dict) and another[k].get("__replace__") is True:
+                dct[k] = copy.deepcopy({key:value for key,value in another[k].items() if key != "__replace__"})
+            elif (k in dct and isinstance(dct[k], dict) and isinstance(another[k], dict)):
                 _merge(dct[k], another[k])
             else:
                 dct[k] = another[k]

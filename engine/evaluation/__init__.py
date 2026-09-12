@@ -1,5 +1,5 @@
 """Protocol-level evaluators shared by dataset adapters."""
 
-from .obb import DotaOBBEvaluator, MergedDotaOBBEvaluator
+from .obb import BenchmarkOBBEvaluator, DotaOBBEvaluator, MergedDotaOBBEvaluator
 
-__all__ = ["DotaOBBEvaluator", "MergedDotaOBBEvaluator"]
+__all__ = ["BenchmarkOBBEvaluator", "DotaOBBEvaluator", "MergedDotaOBBEvaluator"]

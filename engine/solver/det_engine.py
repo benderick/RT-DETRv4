@@ -483,6 +483,8 @@ def train_one_epoch(self_lr_scheduler, lr_scheduler, model: torch.nn.Module, cri
     loader_wait_start = time.perf_counter()
 
     for i, (samples, targets) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
+        if lr_warmup_scheduler is not None and hasattr(lr_warmup_scheduler, "prepare_step"):
+            lr_warmup_scheduler.prepare_step()
         yielded_at = time.perf_counter()
         data_loader_wait_ms = (yielded_at - loader_wait_start) * 1000.0
         global_step = epoch * len(data_loader) + i
@@ -819,7 +821,7 @@ def evaluate(model: torch.nn.Module, criterion: torch.nn.Module, postprocessor,
             (name, _evaluator_metrics(evaluator))
             for name, evaluator in stage_evaluators.items()
         )
-        primary_metric = "mAP50_75_DOTA07"
+        primary_metric = getattr(coco_evaluator, "selection_metric", "mAP50_75_DOTA07")
         first_name, final_name = next(iter(stage_records)), next(reversed(stage_records))
         first_value = stage_records[first_name]["metrics"].get(primary_metric)
         final_value = stage_records[final_name]["metrics"].get(primary_metric)
