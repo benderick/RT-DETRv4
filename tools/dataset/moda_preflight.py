@@ -15,7 +15,7 @@ from engine.core import YAMLConfig
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", default="configs/experiments/moda/dfine_obb_o2.yml")
+    parser.add_argument("--config", default="configs/experiments/moda/dfine_obb_o2_fressdet.yml")
     parser.add_argument("--debug-split", help="Explicit hashed subset; never inferred from missing data")
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--size", type=int, default=128)

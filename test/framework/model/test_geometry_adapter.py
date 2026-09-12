@@ -22,7 +22,7 @@ class GeometryAdapterTest(unittest.TestCase):
     def test_config_and_registry_are_isolated_across_datasets(self):
         baseline_path = "configs/experiments/uav_rod/dfine_obb_o2.yml"
         expected = YAMLConfig(baseline_path).yaml_cfg
-        moda = YAMLConfig("configs/experiments/moda/dfine_obb_o2.yml")
+        moda = YAMLConfig("configs/experiments/moda/dfine_obb_o2_fressdet.yml")
         registry = moda.global_cfg
         registry["HGNetv2"]["_kwargs"]["in_channels"] = 777
         self.assertEqual(GLOBAL_CONFIG["HGNetv2"]["_kwargs"]["in_channels"], 3)

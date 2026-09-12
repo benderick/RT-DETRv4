@@ -12,6 +12,7 @@ use_amp: False
 use_ema: True
 clip_max_norm: 10.0
 HGNetv2:
+  in_channels: 8
   pretrained: False
   freeze_at: -1
   freeze_norm: False
@@ -53,6 +54,8 @@ ema:
   warmups: 2000
 diagnostics_detailed_epoch_interval: 5
 diagnostics_layerwise_epoch_interval: 5
+diagnostics_detailed_image_limit: 16
+diagnostics_query_topk: 20
 train_dataloader:
   total_batch_size: 8
   drop_last: False

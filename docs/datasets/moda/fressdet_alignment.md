@@ -25,7 +25,7 @@
 | 随机种子 | 首组 seed 0；配对实验使用相同种子 |
 
 这个 benchmark 入口的每轮评估使用官方 test，不再额外从 train 划走开发图。
-用于调整结构和超参数的 train/dev 入口仍保留在旧配置中；两套运行使用不同日志目录。
+正式运行统一使用此配方；代码检查通过显式 debug 清单覆盖，不另维护一套训练配置。
 本项目保持 O² 的 ADR、DN、matcher、loss 与 500 个普通 queries；不把 YOLO 的
 box/cls/DFL 损失系数套进不同结构的 criterion。
 
@@ -34,8 +34,8 @@ decoder anchors、旋转采样、BCSR、原图框恢复共同使用该坐标约�
 后改变旋转矩形几何。默认旧配置仍使用原坐标模式。
 
 评估额外保存同一批预测的几何旋转 IoU 指标，字段前缀为 `riou_`，供定位分析使用。
-这些字段采用同样的匹配与积分方式；旧 `DotaOBBEvaluator` 的 DOTA-07/dense AP
-保留给旧配置。选择 checkpoint 的主指标在日志中明确记录为 AP50。
+这些字段采用同样的匹配与积分方式。通用 `DotaOBBEvaluator` 仍供其他数据集的
+DOTA 协议使用；MODA 主配方的 checkpoint 选择指标明确为 AP50。
 
 ## 双 3090 运行
 

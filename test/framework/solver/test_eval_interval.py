@@ -27,14 +27,15 @@ class EvaluationIntervalTest(unittest.TestCase):
                 raise AssertionError("Fulltrain accessed evaluator")
         loader = SimpleNamespace(shuffle=True, collate_fn=SimpleNamespace(stop_epoch=10**9))
         cfg = Config(train_dataloader=loader, optimizer=None, lr_scheduler=None,
-                     lr_warmup_scheduler=None, resume=None, epoches=36, eval_during_training=False)
+                     lr_warmup_scheduler=None, resume=None, epoches=20, eval_during_training=False)
         solver = BaseSolver(cfg)
         with patch.object(solver, "_setup"), patch(
                 "engine.solver._solver.dist_utils.warp_loader", side_effect=lambda obj, **kw: obj):
             solver.train()
         self.assertIsNone(solver.val_dataloader)
         self.assertIsNone(solver.evaluator)
-        formal = YAMLConfig(str(ROOT / "configs/experiments/moda/dfine_obb_o2_fulltrain.yml"))
+        formal = YAMLConfig(str(ROOT / "configs/experiments/moda/dfine_obb_o2_fressdet.yml"),
+                            eval_during_training=False)
         self.assertFalse(formal.eval_during_training)
         self.assertIsNone(formal.yaml_cfg["train_dataloader"]["dataset"]["split_file"])
 

@@ -120,12 +120,12 @@ class MODADataTest(unittest.TestCase):
             with self.assertRaises(FileExistsError):
                 prepare_splits(root,out,group_map=path)
         for method,mode in (("o2","o2_adr"),("angle","direct_angle")):
-            config=YAMLConfig(str(ROOT/f"configs/experiments/moda/dfine_obb_{method}.yml"))
+            config=YAMLConfig(str(ROOT/f"configs/experiments/moda/dfine_obb_{method}_fressdet.yml"))
             self.assertEqual(config.yaml_cfg["HGNetv2"]["in_channels"],8)
             self.assertEqual(config.yaml_cfg["RotatedDFINETransformer"]["refinement_mode"],mode)
-            self.assertEqual(config.yaml_cfg["val_dataloader"]["dataset"]["root"],"./data/MODA/train")
-            self.assertEqual(config.yaml_cfg["evaluator"]["selection_metric"],"mAP50_95")
-            self.assertEqual(config.epoches,36)
+            self.assertEqual(config.yaml_cfg["val_dataloader"]["dataset"]["root"],"./data/MODA/test")
+            self.assertEqual(config.yaml_cfg["evaluator"]["selection_metric"],"AP50")
+            self.assertEqual(config.epoches,20)
 
 
 if __name__ == "__main__":

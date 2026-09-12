@@ -1,2 +1,0 @@
-__include__: [../../dfine/dfine_obb_o2.yml, ../../dataset/moda_obb.yml, ./runtime.yml]
-output_dir: ./logs/moda/dfine_obb_o2
