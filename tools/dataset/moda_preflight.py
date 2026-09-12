@@ -2,12 +2,14 @@
 """Exercise real MODA preprocessing, optimizer steps, OBB losses and inference."""
 import argparse
 import json
+import random
 from pathlib import Path
 import sys
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import torch
+import numpy as np
 from engine.core import YAMLConfig
 
 
@@ -30,8 +32,10 @@ def main():
     if args.amp and device.type != "cuda":
         parser.error("--amp requires CUDA")
     torch.manual_seed(42)
+    random.seed(42)
+    np.random.seed(42)
     cfg = YAMLConfig(args.config, eval_spatial_size=[args.size, args.size],
-                     RotatedDFINETransformer={"num_queries": args.queries})
+                     use_amp=args.amp, RotatedDFINETransformer={"num_queries": args.queries})
     spec = cfg.yaml_cfg["train_dataloader"]["dataset"]
     if args.debug_split:
         spec["split_file"] = args.debug_split
@@ -52,13 +56,17 @@ def main():
     model = cfg.model.to(device).train()
     criterion = cfg.criterion.to(device)
     optimizer = cfg.optimizer
-    scaler = torch.cuda.amp.GradScaler(enabled=args.amp)
+    scaler = cfg.scaler if args.amp else torch.cuda.amp.GradScaler(enabled=False)
     if device.type == "cuda":
         torch.cuda.reset_peak_memory_stats(device)
         torch.cuda.synchronize(device)
     start = time.perf_counter()
     steps = []
-    for _ in range(args.steps):
+    completed = 0
+    # Match the real GradScaler policy: record finite-loss overflow attempts,
+    # skip their optimizer update and let scale back off. Require all requested
+    # successful updates within a bounded calibration budget.
+    for _ in range(args.steps + (12 if args.amp else 0)):
         optimizer.zero_grad(set_to_none=True)
         with torch.autocast(device_type=device.type, enabled=args.amp):
             outputs = model(images, targets)
@@ -69,14 +77,24 @@ def main():
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
         bad = [n for n,p in model.named_parameters() if p.grad is not None and not torch.isfinite(p.grad).all()]
-        if bad:
+        if bad and not args.amp:
             raise RuntimeError(f"Nonfinite gradients: {bad[:10]}")
-        torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.yaml_cfg.get("clip_max_norm", 0.1))
+        if not bad:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.yaml_cfg.get("clip_max_norm", 0.1))
+        scale_before = scaler.get_scale()
         scaler.step(optimizer)
         scaler.update()
         steps.append({"loss": float(loss.detach()), "loss_terms": len(losses),
                       "dn_split": outputs.get("dn_meta", {}).get("dn_num_split"),
-                      "amp_scale": scaler.get_scale()})
+                      "amp_scale_before": scale_before, "amp_scale": scaler.get_scale(),
+                      "skipped": bool(bad), "nonfinite_gradient_tensors": len(bad),
+                      "nonfinite_gradient_examples": bad[:10]})
+        if not bad:
+            completed += 1
+        if completed == args.steps:
+            break
+    if completed != args.steps:
+        raise RuntimeError(f"AMP did not complete {args.steps} finite updates: {steps}")
     model.eval()
     model.decoder.decoder.diagnostic_mode = True
     with torch.inference_mode(), torch.autocast(device_type=device.type, enabled=args.amp):
