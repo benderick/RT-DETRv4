@@ -4,6 +4,9 @@
 [MODA 文档](../../datasets/moda/README.md)，配置与所有权见 [manifest](manifest.json)。
 已完成检查及限制见 [验证记录](verification.md)。
 
+设计复审见 [理论与实现审查](design_review.md)。当前代码为 v1 原型；后续主论文方向
+需要保留边上位置、校准边界位移可靠性并显式约束几何更新，尚未作为新模型实现。
+
 当前主实验采用 [FressDet 论文设置配方](../../datasets/moda/fressdet_alignment.md)：
 完整 train/test、20 epochs、宽 1216 × 高 928、global batch8、从头训练与 ProbIoU AP。
 
@@ -54,8 +57,8 @@ B1/B2/B3 参数名和形状完全相同，区别仅为权重共享或采样引�
 保持数据分割、图像尺度、源 difficulty、预训练、seed、优化器、普通 queries、DN
 策略、训练轮数、评估器、max_det 一致。主 benchmark 使用全部 9,156 张 train，
 每轮在官方 test 上评估，按 AP50 选 EMA checkpoint，与发布评估流程对应。
-首组 seed 0；条件允许时配对更多种子。结构和超参数开发仍可使用独立 train/dev
-旧配方，日志与 benchmark 分开。先检查基线学习曲线，再评价新模块收益。
+首组 seed 0；条件允许时配对更多种子。小样本调试通过显式清单与尺寸覆盖进行，
+不维护另一套训练轮数。先检查基线学习曲线，再评价新模块收益。
 若 12 小时预算内未收敛，报告学习曲线和实际耗时，不把不同训练进度当方法差异。
 
 首个训练验证关注：新增分支是否持续获得有限非零梯度、残差是否激活、是否只有少数
@@ -81,11 +84,9 @@ python tools/dataset/moda_preflight.py --config configs/incubator/bcsr/moda_edge
 CUDA_VISIBLE_DEVICES=0,1 torchrun --standalone --nproc_per_node=2 train.py -c configs/incubator/bcsr/moda_edge_fressdet.yml --seed 0
 ```
 
-旧 36 轮开发协议的全训练集入口为 `configs/incubator/bcsr/moda_edge_fulltrain.yml`，不构造
-验证集；测试入口为 `configs/incubator/bcsr/moda_edge_test.yml`，需
-`--test-only -r logs/research/bcsr/moda_edge_fulltrain/last.pth`。不同消融/seed 使用
-不同 `--output-dir`，正式训练前 `git status --short` 必须为空。双 3090 的正式显存、
-吞吐、12 小时完成性均待测。
+评估使用同一个配置，加 `--test-only -r /path/to/checkpoint.pth`。不同消融/seed
+使用不同 `--output-dir`，正式训练前 `git status --short` 必须为空。双 3090 的
+正式显存、吞吐、12 小时完成性均待测。
 
 小型两进程 CPU 验证（需要本机 loopback socket）：
 

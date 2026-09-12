@@ -1,7 +1,0 @@
-__include__: [./moda_edge.yml]
-output_dir: ./logs/research/bcsr/moda_edge_test
-val_dataloader:
-  dataset:
-    root: ./data/MODA/test
-    expected_labels: 4885
-    split_file: ~

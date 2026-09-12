@@ -1,6 +1,0 @@
-# Same parameterization as edge routing, one spectral weighting per object.
-__include__: [./moda_edge.yml]
-output_dir: ./logs/research/bcsr/moda_object
-RotatedDFINETransformer:
-  geometry_adapter:
-    weighting: object

@@ -10,9 +10,11 @@
     "framework_commit": "499b526ea7e17a270df7e0361068dc18b8ab24b9",
     "preflight_commit": "603c6941a859cf0c71b6751c352ab33863591e6f",
     "benchmark_framework_commit": "5ee03ad82ba3a7031641c5364cc44bce34fb620a",
-    "recipe_note": "Primary paired experiments share fressdet_paper_protocol.yml: full MODA train/test, 20 epochs, W1216 x H928, global batch8, scratch initialization, no augmentation, and ProbIoU AP50 checkpoint selection. O2 model semantics remain inherited; previous 36-epoch train/dev recipes are separate development controls.",
+    "recipe_note": "All paired experiments share fressdet_paper_protocol.yml: full MODA train/test, 20 epochs, W1216 x H928, global batch8, scratch initialization, no augmentation, and ProbIoU AP50 checkpoint selection. O2 model semantics remain inherited. Superseded recipes were removed with resolved configuration equivalence verified.",
     "branch": "idea/bcsr",
     "protocol_version": "bcsr-fressdet-paper-v1",
+    "design_review": "docs/ideas/bcsr/design_review.md",
+    "design_review_note": "Current v1 remains an implicit geometry-feature residual prototype. Point-preserving, reliability-calibrated explicit geometric refinement is a reviewed v2 proposal, not an implemented detector.",
     "owned_paths": [
       "docs/ideas/bcsr",
       "engine/rtv4/obb/incubator/bcsr",

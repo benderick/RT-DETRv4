@@ -140,13 +140,13 @@ class BCSRTest(unittest.TestCase):
         states = []
         for variant in ("edge", "object", "initial"):
             torch.manual_seed(23)
-            cfg = YAMLConfig(f"configs/incubator/bcsr/moda_{variant}.yml", HGNetv2={"pretrained":False})
+            cfg = YAMLConfig(f"configs/incubator/bcsr/moda_{variant}_fressdet.yml")
             model = cfg.model
             states.append({k:tuple(v.shape) for k,v in model.decoder.geometry_adapter.state_dict().items()})
         self.assertEqual(states[0],states[1])
         self.assertEqual(states[0],states[2])
         torch.manual_seed(23)
-        baseline = YAMLConfig("configs/experiments/moda/dfine_obb_o2.yml",HGNetv2={"pretrained":False})
+        baseline = YAMLConfig("configs/experiments/moda/dfine_obb_o2_fressdet.yml")
         self.assertIsNone(baseline.model.decoder.geometry_adapter)
         self.assertNotIn("imports",baseline.yaml_cfg)
         for key,value in baseline.model.state_dict().items():

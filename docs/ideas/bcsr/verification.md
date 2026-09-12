@@ -74,3 +74,16 @@ preflight 保留每次 scale、skipped、非有限梯度计数，最多允许 12
 最新链路证据位于 `logs/research/bcsr/paper_protocol_trainer_cpu_smoke_v2/`，
 早期的主配方 preflight 位于 `logs/research/bcsr/paper_protocol_preflight_cpu.json`。
 这是代码可运行性证据；未测量新配方全分辨率显存或双 3090 吞吐，不据此推算正式 AP。
+
+## 配置清理与设计复审
+
+删除 MODA/BCSR 的 10 个旧配置文件，将保留的 O²、BCSR edge/object/initial 直接
+连接到 20 轮主配方。清理前后四份完整解析配置逐项相同，包括输入通道、优化器、
+诊断预算及数据加载设置。direct-angle 同步提供该主配方下的独立入口。
+清理记录位于 `logs/research/bcsr/cleanup_review/config_equivalence.json`。
+
+新 [设计复审](design_review.md) 区分 v1 原型已有性质与 v2 候选。局部几何 probe
+验证边上平均的角度信息抵消反例、保留一阶矩恢复秩、GLS 方差以及相关波段重复计数
+的反例。结果在 `logs/research/bcsr/cleanup_review/theory_probe.json`；所有噪声和
+方差数据为显式构造，不是 MODA 实测。没有修改现有 detector 算子，也没有获得
+新模型精度结果。

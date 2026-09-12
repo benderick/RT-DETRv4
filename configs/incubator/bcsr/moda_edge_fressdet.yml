@@ -1,5 +1,17 @@
-__include__: [./moda_edge.yml, ../../experiments/moda/fressdet_paper_protocol.yml]
+__include__: [../../experiments/moda/dfine_obb_o2_fressdet.yml]
+imports: [engine.rtv4.obb.incubator.bcsr]
 output_dir: ./logs/research/bcsr/moda_edge_fressdet
 RotatedDFINETransformer:
   geometry_adapter:
+    type: BoundarySpectralRefinement
+    hidden_dim: 256
+    bands: 8
+    band_dim: 8
+    routing_dim: 32
+    samples_per_edge: 4
+    weighting: edge
+    sampling_reference: iterative
+    offset_ratio: 0.15
+    min_offset: 1.0
+    max_offset: 8.0
     box_coordinate_mode: isotropic
