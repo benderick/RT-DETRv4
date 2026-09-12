@@ -1,0 +1,6 @@
+# Same edge routing, sample every layer at the first decoder input reference.
+__include__: [./moda_edge.yml]
+output_dir: ./logs/research/bcsr/moda_initial
+RotatedDFINETransformer:
+  geometry_adapter:
+    sampling_reference: initial

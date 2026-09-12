@@ -1,0 +1,6 @@
+__include__: [./moda_edge.yml]
+output_dir: ./logs/research/bcsr/moda_edge_fulltrain
+eval_during_training: False
+train_dataloader:
+  dataset:
+    split_file: ~

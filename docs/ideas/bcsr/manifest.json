@@ -1,0 +1,28 @@
+{
+  "schema_version": "research-idea-manifest-v1",
+  "idea": {
+    "id": "bcsr",
+    "title": "Boundary-conditioned spectral refinement for multispectral OBB detection",
+    "status": "feasibility",
+    "claim": "Current predicted boundaries can route local spectral evidence to improve iterative OBB localization beyond object-shared spectral routing.",
+    "base_tag": "obb-o2-baseline-v1",
+    "base_commit": "e1ba718fb1d3df4aa58dd7097e3bbe131951d171",
+    "framework_commit": "499b526ea7e17a270df7e0361068dc18b8ab24b9",
+    "preflight_commit": "603c6941a859cf0c71b6751c352ab33863591e6f",
+    "recipe_note": "Paired MODA controls use current 7b5f727 tuning plus the shared MODA recipe; historical tag learning-rate/angle-loss settings differ.",
+    "branch": "idea/bcsr",
+    "protocol_version": "bcsr-feasibility-v1",
+    "owned_paths": [
+      "docs/ideas/bcsr",
+      "engine/rtv4/obb/incubator/bcsr",
+      "configs/incubator/bcsr",
+      "test/research/bcsr",
+      "tools/research/bcsr"
+    ],
+    "preserved_evidence": [],
+    "discard_artifacts_on_retire": [],
+    "verdict": null,
+    "verdict_scope": null,
+    "retired_on": null
+  }
+}
