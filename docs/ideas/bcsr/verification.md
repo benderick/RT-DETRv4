@@ -5,7 +5,8 @@
 
 ## 已完成
 
-- 项目统一 CPU 测试：161 项，158 通过，3 项因 CUDA 在沙箱中不可见而跳过。
+- 项目统一 CPU 测试（加入矩形输入与 benchmark 配方后）：172 项，169 通过，
+  3 项因 CUDA 在沙箱中不可见而跳过。
   跳过项是既有的三项真实数据 1024 CUDA smoke；没有把断言失败改为 skip。
 - 对改动前 `7b5f727` 的 decoder 源码做独立比对：direct-angle、O² 参数树严格加载，
   train/eval 的预测框和类别 logits 数值完全一致。
@@ -50,5 +51,26 @@ preflight 保留每次 scale、skipped、非有限梯度计数，最多允许 12
 ## 尚不能据此宣称
 
 没有 MODA 完整训练结果；没有边界路由胜过整框共享路由的证据；没有确认日期代理分割
-已排除场景泄漏；没有与 FressDet/OSSDet 统一 evaluator 后的比较。历史 O² 验收配方
+已排除场景泄漏；没有本项目模型与 FressDet/OSSDet 的实际性能比较。历史 O² 验收配方
 与当前仓库 `7b5f727` 的三项调参差异保持可见，没有为了通过测试修改科学验收标准。
+
+## FressDet 论文设置配方验证
+
+新增 [20 轮 benchmark 配方](../../datasets/moda/fressdet_alignment.md)，主输入为
+宽 1216 × 高 928、从头训练、无增强、全局 batch8。当前三种 BCSR 消融均为
+19,635,146 参数；与基线在相同 seed 下的所有共享初始参数完全一致。
+
+- ProbIoU、阈值匹配、AP 插值积分、fast NMS 对照本地 FressDet 函数通过；覆盖其
+  AP=0.995 边界和已被抑制候选仍可抑制其他候选的行为。
+- 矩形 isotropic 坐标在 transform、ADR/angle decoder、旋转 attention、BCSR、
+  postprocessor 与诊断恢复中一致；物理采样与等价框表示测试通过。
+- 真实 16 图 debug 清单、宽96 × 高64、20 queries、FP32，用实际训练入口完成
+  两轮、16 次更新，每轮完整评估该小清单；EMA、逐层 AP、最佳 AP50 checkpoint、
+  最后 checkpoint、原图坐标推理导出均通过。warmup 仅在此 smoke 缩为 12 次迭代，
+  以覆盖跨 epoch 与预热结束；所有运行覆盖保存在 runtime.yml。
+- AdamW 以所属模块类型识别归一化参数，含 Sequential 内匿名 LayerNorm；bias
+  和归一化权重免衰减。跨 epoch 预热保持当次迭代的线性插值。
+
+最新链路证据位于 `logs/research/bcsr/paper_protocol_trainer_cpu_smoke_v2/`，
+早期的主配方 preflight 位于 `logs/research/bcsr/paper_protocol_preflight_cpu.json`。
+这是代码可运行性证据；未测量新配方全分辨率显存或双 3090 吞吐，不据此推算正式 AP。

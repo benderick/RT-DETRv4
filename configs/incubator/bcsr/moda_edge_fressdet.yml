@@ -1,0 +1,5 @@
+__include__: [./moda_edge.yml, ../../experiments/moda/fressdet_paper_protocol.yml]
+output_dir: ./logs/research/bcsr/moda_edge_fressdet
+RotatedDFINETransformer:
+  geometry_adapter:
+    box_coordinate_mode: isotropic

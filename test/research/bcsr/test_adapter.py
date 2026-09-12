@@ -77,6 +77,24 @@ class BCSRTest(unittest.TestCase):
             actual, _ = self.run_adapter(model, boxes=alternative)
             torch.testing.assert_close(baseline, actual, atol=2e-6, rtol=2e-5)
 
+    def test_isotropic_coordinates_preserve_physical_sampling_and_routing(self):
+        isotropic = self.boxes.clone()
+        isotropic[..., [1, 3]] *= 48/80
+        axis_model = self.adapter()
+        self.activate(axis_model)
+        iso_model = self.adapter(box_coordinate_mode="isotropic")
+        iso_model.load_state_dict(axis_model.state_dict(), strict=True)
+        expected, axis_context = self.run_adapter(axis_model)
+        actual, iso_context = self.run_adapter(iso_model, boxes=isotropic)
+        torch.testing.assert_close(expected, actual, atol=2e-6, rtol=2e-5)
+        torch.testing.assert_close(axis_context["records"][0]["sampling_points"],
+                                   iso_context["records"][0]["sampling_points"])
+        swapped = isotropic.clone()
+        swapped[..., [2, 3]] = isotropic[..., [3, 2]]
+        swapped[..., 4] += .5
+        equivalent, _ = self.run_adapter(iso_model, boxes=swapped)
+        torch.testing.assert_close(actual, equivalent, atol=2e-6, rtol=2e-5)
+
     def test_padding_values_and_ground_truth_do_not_control_routing(self):
         model = self.adapter()
         self.activate(model)

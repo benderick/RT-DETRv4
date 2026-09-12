@@ -1,0 +1,5 @@
+__include__: [./moda_edge_fressdet.yml]
+output_dir: ./logs/research/bcsr/moda_initial_fressdet
+RotatedDFINETransformer:
+  geometry_adapter:
+    sampling_reference: initial

@@ -9,9 +9,10 @@
     "base_commit": "e1ba718fb1d3df4aa58dd7097e3bbe131951d171",
     "framework_commit": "499b526ea7e17a270df7e0361068dc18b8ab24b9",
     "preflight_commit": "603c6941a859cf0c71b6751c352ab33863591e6f",
-    "recipe_note": "Paired MODA controls use current 7b5f727 tuning plus the shared MODA recipe; historical tag learning-rate/angle-loss settings differ.",
+    "benchmark_framework_commit": "5ee03ad82ba3a7031641c5364cc44bce34fb620a",
+    "recipe_note": "Primary paired experiments share fressdet_paper_protocol.yml: full MODA train/test, 20 epochs, W1216 x H928, global batch8, scratch initialization, no augmentation, and ProbIoU AP50 checkpoint selection. O2 model semantics remain inherited; previous 36-epoch train/dev recipes are separate development controls.",
     "branch": "idea/bcsr",
-    "protocol_version": "bcsr-feasibility-v1",
+    "protocol_version": "bcsr-fressdet-paper-v1",
     "owned_paths": [
       "docs/ideas/bcsr",
       "engine/rtv4/obb/incubator/bcsr",

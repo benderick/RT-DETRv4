@@ -4,6 +4,9 @@
 [MODA 文档](../../datasets/moda/README.md)，配置与所有权见 [manifest](manifest.json)。
 已完成检查及限制见 [验证记录](verification.md)。
 
+当前主实验采用 [FressDet 论文设置配方](../../datasets/moda/fressdet_alignment.md)：
+完整 train/test、20 epochs、宽 1216 × 高 928、global batch8、从头训练与 ProbIoU AP。
+
 ## 科学问题与方法
 
 暂定主张：同一目标不同边缘的有效光谱证据可能不同；用当前预测框的内外边界对比
@@ -39,19 +42,20 @@ C4 网络和 oriented-aware head。本方法研究的最小命题是：**预测�
 
 | 组别 | 配置 | 回答的问题 |
 |---|---|---|
-| B0 | `configs/experiments/moda/dfine_obb_o2.yml` | 八通道 O² 基线 |
-| B1 | `configs/incubator/bcsr/moda_object.yml` | 相同分支、整框共享光谱权重的收益 |
-| B2 | `configs/incubator/bcsr/moda_edge.yml` | 每边独立权重是否额外改善定位 |
-| B3 | `configs/incubator/bcsr/moda_initial.yml` | 每层更新采样框是否必要 |
+| B0 | `configs/experiments/moda/dfine_obb_o2_fressdet.yml` | 八通道 O² 基线 |
+| B1 | `configs/incubator/bcsr/moda_object_fressdet.yml` | 相同分支、整框共享光谱权重的收益 |
+| B2 | `configs/incubator/bcsr/moda_edge_fressdet.yml` | 每边独立权重是否额外改善定位 |
+| B3 | `configs/incubator/bcsr/moda_initial_fressdet.yml` | 每层更新采样框是否必要 |
 
 B1/B2/B3 参数名和形状完全相同，区别仅为权重共享或采样引用选择；B3 的固定框是
 **第一层输入 reference**，不是 O² 内部另一个固定 pre-box ADR anchor。B0 和 B2
 参数量不同，不能单靠 B2>B0 支持边界路由主张。
 
 保持数据分割、图像尺度、源 difficulty、预训练、seed、优化器、普通 queries、DN
-策略、训练轮数、评估器、max_det 一致。先用完整 train 来源的 train/dev 建立基线
-并对齐学习曲线；开发阶段不读取 test。条件允许时配对 seed 42/43/44。冻结超参数
-与训练轮数后，以全部 9,156 张 train 训练最终模型，并用固定末轮 checkpoint 测试。
+策略、训练轮数、评估器、max_det 一致。主 benchmark 使用全部 9,156 张 train，
+每轮在官方 test 上评估，按 AP50 选 EMA checkpoint，与发布评估流程对应。
+首组 seed 0；条件允许时配对更多种子。结构和超参数开发仍可使用独立 train/dev
+旧配方，日志与 benchmark 分开。先检查基线学习曲线，再评价新模块收益。
 若 12 小时预算内未收敛，报告学习曲线和实际耗时，不把不同训练进度当方法差异。
 
 首个训练验证关注：新增分支是否持续获得有限非零梯度、残差是否激活、是否只有少数
@@ -67,21 +71,21 @@ B2 若只胜 B0、不胜 B1，应收窄为额外光谱分支的工程收益。�
 ```bash
 conda activate wyq-deim
 python -m unittest test.research.bcsr.test_adapter -v
-python tools/dataset/moda_preflight.py --config configs/incubator/bcsr/moda_edge.yml --debug-split logs/moda/debug_split/debug.json --steps 4 --output logs/research/bcsr/preflight_cpu.json
+python tools/dataset/moda_preflight.py --config configs/incubator/bcsr/moda_edge_fressdet.yml --debug-split logs/moda/debug_split/debug.json --height 64 --width 96 --queries 20 --steps 4 --output logs/research/bcsr/paper_protocol_preflight_cpu.json
 ```
 
-在目标机器先用 `moda_preflight.py --device cuda:0 --amp --size 1024 --queries 500
---batch-size 4 --dense` 测量密集 batch 显存。完整数据、开发分割和资源准备好后：
+在目标机器先按 [运行说明](../../datasets/moda/fressdet_alignment.md) 测量密集 batch
+显存。完整数据与资源准备好后：
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1 torchrun --standalone --nproc_per_node=2 train.py -c configs/incubator/bcsr/moda_edge.yml --seed 42
+CUDA_VISIBLE_DEVICES=0,1 torchrun --standalone --nproc_per_node=2 train.py -c configs/incubator/bcsr/moda_edge_fressdet.yml --seed 0
 ```
 
-全训练集固定轮数入口为 `configs/incubator/bcsr/moda_edge_fulltrain.yml`，不构造
+旧 36 轮开发协议的全训练集入口为 `configs/incubator/bcsr/moda_edge_fulltrain.yml`，不构造
 验证集；测试入口为 `configs/incubator/bcsr/moda_edge_test.yml`，需
 `--test-only -r logs/research/bcsr/moda_edge_fulltrain/last.pth`。不同消融/seed 使用
 不同 `--output-dir`，正式训练前 `git status --short` 必须为空。双 3090 的正式显存、
-吞吐、12 小时完成性均待测，当前配置的全局 batch 8 只是起点。
+吞吐、12 小时完成性均待测。
 
 小型两进程 CPU 验证（需要本机 loopback socket）：
 

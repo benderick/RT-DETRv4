@@ -14,14 +14,15 @@ from .....core import register
 
 
 def boundary_points(boxes, height, width, samples_per_edge=4, offset_ratio=.15,
-                    min_offset=1., max_offset=8.):
+                    min_offset=1., max_offset=8., box_coordinate_mode="per_axis"):
     """Normalized [B,Q,edge,sample,inside/outside,xy] grid and side descriptors.
 
-Box dimensions are normalized independently by canvas width/height. Construct
+Box values use the declared per-axis or longest-side normalization. Construct
 geometry in pixels before rotating so non-square canvases remain correct.
 Continuous image coordinates span [0,W] x [0,H]; grid_sample uses align_corners=False.
 """
-    scale = boxes.new_tensor([width, height])
+    canvas = boxes.new_tensor([width, height])
+    scale = boxes.new_tensor([max(width,height)]*2) if box_coordinate_mode == "isotropic" else canvas
     center = boxes[..., :2] * scale
     size = boxes[..., 2:4] * scale
     angle = boxes[..., 4] * math.pi
@@ -41,14 +42,14 @@ Continuous image coordinates span [0,W] x [0,H]; grid_sample uses align_corners=
     # Global directions and normalized side length distinguish locations, with
     # no dependence on a side index or on a chosen long-edge chart.
     pose = torch.cat((normals, lengths.unsqueeze(-1) / math.sqrt(width*height)), -1)
-    return points / scale, pose
+    return points / canvas, pose
 
 
 @register()
 class BoundarySpectralRefinement(nn.Module):
     def __init__(self, hidden_dim=256, bands=8, band_dim=8, routing_dim=32,
                  samples_per_edge=4, weighting="edge", sampling_reference="iterative",
-                 offset_ratio=.15, min_offset=1., max_offset=8.):
+                 offset_ratio=.15, min_offset=1., max_offset=8., box_coordinate_mode="per_axis"):
         super().__init__()
         if weighting not in {"edge", "object"}:
             raise ValueError("weighting must be edge or object")
@@ -65,6 +66,9 @@ class BoundarySpectralRefinement(nn.Module):
         self.samples_per_edge = samples_per_edge
         self.weighting, self.sampling_reference = weighting, sampling_reference
         self.offset_ratio, self.min_offset, self.max_offset = offset_ratio, min_offset, max_offset
+        if box_coordinate_mode not in {"per_axis", "isotropic"}:
+            raise ValueError("Unknown box_coordinate_mode")
+        self.box_coordinate_mode = box_coordinate_mode
         # Identical weights process every band independently. Two even-kernel
         # reductions align feature centers with grid_sample's stride-4 lattice.
         # Registry injection builds the adapter before the decoder. Preserve
@@ -118,7 +122,7 @@ class BoundarySpectralRefinement(nn.Module):
             raise ValueError("BCSR must start at decoder layer zero")
         boxes = context["initial_references"] if self.sampling_reference == "initial" else references.detach()
         points, pose = boundary_points(boxes, context["height"], context["width"],
-            self.samples_per_edge, self.offset_ratio, self.min_offset, self.max_offset)
+            self.samples_per_edge, self.offset_ratio, self.min_offset, self.max_offset,self.box_coordinate_mode)
         batch, count = queries.shape[:2]
         features = context["features"]
         grid = points.reshape(batch, count*4*self.samples_per_edge*2, 1, 2) * 2 - 1
