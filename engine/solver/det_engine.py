@@ -491,6 +491,9 @@ def train_one_epoch(self_lr_scheduler, lr_scheduler, model: torch.nn.Module, cri
         diagnostic_step = diagnostics is not None and diagnostics.enabled and (
             diagnostics.should_log_train(global_step)
         )
+        train_decoder = getattr(dist_utils.de_parallel(model), "decoder", None)
+        if train_decoder is not None and getattr(train_decoder, "query_adapter", None) is not None:
+            train_decoder.collect_train_diagnostics = bool(diagnostic_step)
         if diagnostic_step and device.type == "cuda" and torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats(device)
         step_start = _synchronize_for_measurement(device, diagnostic_step)
@@ -699,6 +702,7 @@ def evaluate(model: torch.nn.Module, criterion: torch.nn.Module, postprocessor,
         coco_evaluator, "diagnostic_dataset", coco_evaluator.dataset)
     diagnostic_eval = bool(
         diagnostics is not None and diagnostics.enabled and "rbox" in iou_types)
+    full_eval_records = diagnostic_eval and diagnostics.needs_full_eval_records()
     model_module = dist_utils.de_parallel(model)
     decoder = getattr(model_module, "decoder", None)
     previous_diagnostic_mode = None
@@ -740,7 +744,7 @@ def evaluate(model: torch.nn.Module, criterion: torch.nn.Module, postprocessor,
         forward_end = _synchronize_for_measurement(device, diagnostic_eval)
 
         if 'rbox' in iou_types:
-            if diagnostic_eval:
+            if full_eval_records:
                 results, post_diagnostics = postprocessor(
                     outputs, targets, return_diagnostics=True)
             else:
@@ -750,7 +754,7 @@ def evaluate(model: torch.nn.Module, criterion: torch.nn.Module, postprocessor,
             results = postprocessor(outputs, orig_target_sizes)
         postprocess_end = _synchronize_for_measurement(device, diagnostic_eval)
 
-        if diagnostic_eval:
+        if full_eval_records:
             matching = criterion.matcher(outputs, targets, return_costs=True)
             matching_end = _synchronize_for_measurement(device, True)
             diagnostics.record_evaluation_batch(
@@ -770,6 +774,19 @@ def evaluate(model: torch.nn.Module, criterion: torch.nn.Module, postprocessor,
                 device=device,
             )
 
+        record_end = _synchronize_for_measurement(device, diagnostic_eval)
+        if diagnostic_eval:
+            if not full_eval_records:
+                diagnostics.record_compact_predictions(outputs, targets, results, diagnostic_dataset, postprocessor)
+            serialization_end = _synchronize_for_measurement(device, True)
+            diagnostics.record_evaluation_performance({
+                "batch_size":len(targets), "data_loader_wait_ms":data_loader_wait_ms,
+                "host_to_device_ms":(transfer_end-batch_start)*1000,
+                "forward_ms":(forward_end-transfer_end)*1000,
+                "postprocess_and_nms_ms":(postprocess_end-forward_end)*1000,
+                "diagnostic_matching_and_records_ms":(record_end-postprocess_end)*1000,
+                "prediction_archive_ms":(serialization_end-record_end)*1000,
+            })
             if diagnostics.needs_layerwise_eval():
                 stage_outputs = _refinement_stage_outputs(outputs)
                 if not stage_outputs:

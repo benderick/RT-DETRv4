@@ -26,11 +26,11 @@ class RTv4(nn.Module):
 
     @property
     def requires_image_context(self):
-        return getattr(self.decoder, "geometry_adapter", None) is not None
+        return getattr(self.decoder, "query_adapter", None) is not None
 
     @property
     def diagnostic_gradient_groups(self):
-        adapter = getattr(self.decoder, "geometry_adapter", None)
+        adapter = getattr(self.decoder, "query_adapter", None)
         return getattr(adapter, "diagnostic_gradient_groups", {})
 
     def forward(self, x, targets=None, teacher_encoder_output=None):

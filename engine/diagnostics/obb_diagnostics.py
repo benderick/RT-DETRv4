@@ -300,6 +300,9 @@ class OBBDiagnostics:
             0, int(getattr(cfg, "diagnostics_layerwise_epoch_interval", 0)))
         self.total_epochs = int(getattr(cfg, "epoches", 0))
         self.query_topk = max(0, int(getattr(cfg, "diagnostics_query_topk", 50)))
+        self.eval_records = getattr(cfg, "diagnostics_eval_records", "full")
+        if self.eval_records not in {"full", "compact"}:
+            raise ValueError("diagnostics_eval_records must be full or compact")
         self.rank = dist_utils.get_rank()
         self.world_size = dist_utils.get_world_size()
         self.root = Path(output_dir) / "diagnostics"
@@ -311,6 +314,7 @@ class OBBDiagnostics:
         self._detailed_eval_enabled = True
         self._layerwise_eval_enabled = False
         self._counts = {}
+        self._performance = []
         if not self.enabled:
             return
         self.root.mkdir(parents=True, exist_ok=True)
@@ -395,6 +399,31 @@ class OBBDiagnostics:
 
         return self.enabled and self._layerwise_eval_enabled
 
+    def needs_full_eval_records(self):
+        return self.enabled and self.eval_records == "full"
+
+    def record_evaluation_performance(self, record):
+        self._performance.append(record)
+        self._writer("performance", self._eval_dir, append=False).write(record)
+
+    def record_compact_predictions(self, outputs, targets, results, dataset, postprocessor):
+        """One binary tensor bundle per batch; no Python row per candidate.
+
+        Raw final query logits and boxes permit both post-processing policies
+        to be reevaluated later without a second detector forward.
+        """
+        directory=self._eval_dir/"predictions";directory.mkdir(exist_ok=True)
+        payload={"image_ids":[int(t["image_id"].item()) for t in targets],
+                 "pred_logits":outputs["pred_logits"].detach().float().cpu(),
+                 "query_boxes_pixels":postprocessor.restore_boxes(outputs["pred_boxes"],targets).detach().float().cpu(),
+                 "results":[_cpu_dict(r) for r in results],
+                 "postprocess":{"apply_nms":postprocessor.apply_nms,"num_top_queries":postprocessor.num_top_queries,
+                                "score_threshold":postprocessor.score_threshold,"max_detections":postprocessor.max_detections},
+                 "coordinate_space":"original_pixels_radians","protocol":"final-query-predictions-v1"}
+        path=directory/f"batch{self._eval_batch_index:05d}.rank{self.rank:03d}.pt"
+        temporary=path.with_suffix(".tmp");torch.save(payload,temporary);temporary.replace(path)
+        self._eval_batch_index+=1
+
     def _writer(self, name, directory=None, append=True):
         directory = self.root if directory is None else Path(directory)
         key = (str(directory), name)
@@ -430,8 +459,18 @@ class OBBDiagnostics:
         label = f"epoch_{int(epoch):04d}" if epoch is not None else "standalone"
         self._eval_dir = self.root / "eval" / label
         self._eval_dir.mkdir(parents=True, exist_ok=True)
+        if dist_utils.is_main_process():
+            # A previous completion marker must not make an in-progress
+            # reevaluation appear replayable. Remove obsolete rank archives
+            # too, since the number of evaluation workers may have changed.
+            (self._eval_dir/'metrics.json').unlink(missing_ok=True)
+            for path in (self._eval_dir/'predictions').glob('*.pt'):
+                path.unlink()
+        if dist_utils.is_dist_available_and_initialized():
+            torch.distributed.barrier()
         self._eval_epoch = None if epoch is None else int(epoch)
         self._eval_batch_index = 0
+        self._performance = []
         self._detailed_seen = 0
         epoch_number = None if epoch is None else int(epoch) + 1
         self._detailed_eval_enabled = bool(
@@ -467,6 +506,7 @@ class OBBDiagnostics:
                 "layerwise_epoch_interval": self.layerwise_epoch_interval,
                 "full_validation_layerwise_metrics_enabled": self._layerwise_eval_enabled,
                 "query_topk": self.query_topk,
+                "eval_records": self.eval_records,
                 "nms_status_codes": NMS_STATUS,
             })
 
@@ -1098,9 +1138,14 @@ class OBBDiagnostics:
         local_summary = {
             "schema_version": SCHEMA_VERSION, "rank": self.rank,
             "epoch": self._eval_epoch, "record_counts": self._counts,
+            "performance_totals_seconds": {key[:-3]:sum(row.get(key,0) for row in self._performance)/1000
+                for key in set().union(*(row.keys() for row in self._performance)) if key.endswith("_ms")},
+            "ap_accumulation_seconds": getattr(evaluator,"accumulation_seconds",None),
         }
         _write_json(self._eval_dir / f"summary.rank{self.rank:03d}.json", local_summary)
         if dist_utils.is_main_process():
+            if hasattr(evaluator,"export_paper_table"):
+                evaluator.export_paper_table(self._eval_dir)
             _write_json(self._eval_dir / "metrics.json", {
                 "schema_version": SCHEMA_VERSION, "epoch": self._eval_epoch,
                 "metrics": getattr(evaluator, "metrics", {}),

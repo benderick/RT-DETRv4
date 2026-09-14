@@ -1,0 +1,24 @@
+__include__: [./dfine_obb_o2_fressdet.yml]
+imports: [engine.rtv4.spectral_evidence]
+output_dir: ./logs/moda/spectral_full
+RotatedDFINETransformer:
+  query_adapter:
+    type: BackgroundConditionedSpectralEvidence
+    hidden_dim: 256
+    bands: 8
+    band_dim: 4
+    spectral_dim: 8
+    mode: full
+    apply_layer: 1
+    candidate_side: 7
+    background_side: 11
+    context_scale: 3.0
+    min_context_px: 32.0
+    min_background_support: 16.0
+    shrinkage: 0.2
+    ridge_ratio: 0.01
+    ridge_floor: 0.001
+    temperature: 1.0
+    residual_scale: 0.1
+    query_chunk_size: 64
+    box_coordinate_mode: isotropic

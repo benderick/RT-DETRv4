@@ -19,6 +19,7 @@ from ._solver import BaseSolver, should_evaluate_epoch, validate_eval_interval
 from .det_engine import train_one_epoch, evaluate
 from ..optim.lr_scheduler import FlatCosineLRScheduler
 from ..diagnostics import OBBDiagnostics
+from ..diagnostics.source_evidence import SourceEvidenceRecorder
 
 
 def checkpoint_selection_score(values, evaluator):
@@ -91,6 +92,12 @@ class DetSolver(BaseSolver):
         best_stat_print = best_stat.copy()
         start_time = time.time()
         start_epoch = self.last_epoch + 1
+        evidence_settings=getattr(args,"diagnostics_source_evidence",{})
+        evidence = SourceEvidenceRecorder(evidence_settings, self.output_dir,
+            self.train_dataloader.dataset, self.val_dataloader.dataset.transforms, args.epoches) if evidence_settings.get('enabled') else None
+        if evidence is not None and start_epoch == 0:
+            evidence.capture(self.ema.module if self.ema else self.model, self.criterion,
+                self.postprocessor, self.device, -1, "ema" if self.ema else "model")
         for epoch in range(start_epoch, args.epoches):
 
             self.train_dataloader.set_epoch(epoch)
@@ -245,6 +252,10 @@ class DetSolver(BaseSolver):
                         self.load_resume_state(str(self.output_dir / 'best_stg1.pth'))
                         print(f'Refresh EMA at epoch {epoch} with decay {self.ema.decay}')
 
+
+            if evidence is not None:
+                evidence.capture(self.ema.module if self.ema else self.model, self.criterion,
+                    self.postprocessor, self.device, epoch, "ema" if self.ema else "model")
 
             log_stats = {
                 **{f'train_{k}': v for k, v in train_stats.items()},

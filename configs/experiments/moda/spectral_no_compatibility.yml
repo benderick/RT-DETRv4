@@ -1,0 +1,5 @@
+__include__: [./spectral_full.yml]
+output_dir: ./logs/moda/spectral_no_compatibility
+RotatedDFINETransformer:
+  query_adapter:
+    mode: no_compatibility

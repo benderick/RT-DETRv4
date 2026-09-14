@@ -95,6 +95,8 @@ class BaseConfig(object):
         # extra post-processing/evaluation pass; experiments opt in explicitly.
         self.diagnostics_layerwise_epoch_interval: int = 0
         self.diagnostics_query_topk: int = 50
+        self.diagnostics_source_evidence: dict = {}
+        self.diagnostics_eval_records: str = "full"
 
         # distillation: General distillation control switch
         self._teacher_model: nn.Module = None

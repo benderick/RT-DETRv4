@@ -26,9 +26,15 @@ def main():
     parser.add_argument("--steps", type=int, default=3)
     parser.add_argument("--amp", action="store_true")
     parser.add_argument("--dense", action="store_true", help="Use images with the most source objects")
+    parser.add_argument("--paper-size", action="store_true", help="Keep configured resize/pad operations and the full paper canvas")
     parser.add_argument("--output", type=Path, default=Path("logs/moda/preflight.json"))
     args = parser.parse_args()
     height, width = args.height or args.size, args.width or args.size
+    if args.paper_size:
+        if args.height is not None or args.width is not None:
+            parser.error("--paper-size cannot be combined with --height/--width")
+        from engine.core.yaml_utils import load_config
+        height,width = load_config(args.config)["eval_spatial_size"]
     if min(height, width) < 64 or height % 32 or width % 32 or min(args.queries, args.batch_size, args.steps) < 1:
         parser.error("size must be a multiple of 32 >=64; other counts must be positive")
     device = torch.device(args.device)
@@ -42,9 +48,10 @@ def main():
     spec = cfg.yaml_cfg["train_dataloader"]["dataset"]
     if args.debug_split:
         spec["split_file"] = args.debug_split
-    for operation in spec["transforms"]["ops"]:
-        if operation["type"] in ("RotatedResize", "RotatedPad"):
-            operation["size"] = [width, height]
+    if not args.paper_size:
+        for operation in spec["transforms"]["ops"]:
+            if operation["type"] in ("RotatedResize", "RotatedPad"):
+                operation["size"] = [width, height]
     cfg.yaml_cfg["train_dataloader"].update(total_batch_size=args.batch_size, num_workers=0)
     cfg.yaml_cfg["train_dataloader"]["collate_fn"].update(base_size=[height, width])
     dataset = cfg.train_dataloader.dataset
@@ -59,6 +66,22 @@ def main():
     model = cfg.model.to(device).train()
     criterion = cfg.criterion.to(device)
     optimizer = cfg.optimizer
+    # Exercise the same warmup policy as the trainer; jumping straight to the
+    # final LR is not representative of a from-scratch paper-protocol run.
+    warmup = cfg.lr_warmup_scheduler
+    adapter = getattr(model.decoder,"query_adapter",None)
+    branch_summary = {}
+    if adapter is not None:
+        model.decoder.decoder.diagnostic_mode = True
+        def capture_branch(module, inputs, output):
+            context,layer_index = inputs[2],inputs[3]
+            if layer_index!=module.apply_layer or layer_index not in context["records"]:
+                return
+            record=context["records"][layer_index]
+            for name in ("object_compatibility","evidence_gate","effective_background_support","residual_norm"):
+                value=record[name].detach().float()
+                branch_summary[name]={"mean":float(value.mean()),"min":float(value.min()),"max":float(value.max())}
+        adapter.register_forward_hook(capture_branch)
     scaler = cfg.scaler if args.amp else torch.cuda.amp.GradScaler(enabled=False)
     if device.type == "cuda":
         torch.cuda.reset_peak_memory_stats(device)
@@ -70,6 +93,8 @@ def main():
     # skip their optimizer update and let scale back off. Require all requested
     # successful updates within a bounded calibration budget.
     for _ in range(args.steps + (12 if args.amp else 0)):
+        if warmup is not None and hasattr(warmup,"prepare_step"):
+            warmup.prepare_step()
         optimizer.zero_grad(set_to_none=True)
         with torch.autocast(device_type=device.type, enabled=args.amp):
             outputs = model(images, targets)
@@ -91,7 +116,11 @@ def main():
                       "dn_split": outputs.get("dn_meta", {}).get("dn_num_split"),
                       "amp_scale_before": scale_before, "amp_scale": scaler.get_scale(),
                       "skipped": bool(bad), "nonfinite_gradient_tensors": len(bad),
-                      "nonfinite_gradient_examples": bad[:10]})
+                      "nonfinite_gradient_examples": bad[:10],
+                      "group_lrs":[group["lr"] for group in optimizer.param_groups],
+                      "spectral_summary":dict(branch_summary) if adapter is not None else None})
+        if warmup is not None:
+            warmup.step()
         if not bad:
             completed += 1
         if completed == args.steps:
@@ -109,7 +138,7 @@ def main():
     if device.type == "cuda":
         torch.cuda.synchronize(device)
     report = dict(config=args.config, device=str(device), amp=args.amp, size=args.size,
-                  canvas_height=height, canvas_width=width,
+                  canvas_height=height, canvas_width=width, paper_preprocessing=args.paper_size,
                   queries=args.queries, batch_size=args.batch_size, steps=steps,
                   elapsed_seconds=time.perf_counter()-start,
                   scope="code_smoke_only_not_accuracy_or_training_time_estimate",
@@ -119,6 +148,14 @@ def main():
                   parameters=sum(p.numel() for p in model.parameters()),
                   peak_allocated_bytes=torch.cuda.max_memory_allocated(device) if device.type=="cuda" else None,
                   dataset=dataset.get_dataset_provenance())
+    adapter = getattr(model.decoder,"query_adapter",None)
+    if adapter is not None:
+        report["spectral_evidence"] = {
+            "mode":adapter.mode,"apply_layer":adapter.apply_layer,
+            "parameters":sum(p.numel() for p in adapter.parameters()),
+            "gradient_l1":{n:float(p.grad.abs().sum()) if p.grad is not None else None
+                           for n,p in adapter.named_parameters()},
+            "diagnostic_schema":result.get("diagnostic_query_extensions",{}).get("schema_version")}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2)+"\n")
     print(json.dumps(report, indent=2))

@@ -194,7 +194,7 @@ def main():
                 for target in targets
             ]
             forward_started = _synchronize(device)
-            outputs = model(images)
+            outputs = model(images, targets=device_targets) if getattr(model, "requires_image_context", False) else model(images)
             forward_finished = _synchronize(device)
             results = postprocessor(outputs, device_targets)
             postprocess_finished = _synchronize(device)

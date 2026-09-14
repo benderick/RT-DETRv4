@@ -19,7 +19,7 @@
 | 优化器 | AdamW，LR 0.01、betas=(0.937, 0.999)、weight decay 0.0005 |
 | 学习率 | 线性衰减，终点比例 0.01；前三轮 warmup，bias 起始 LR 0.1，其余为 0 |
 | 精度与 EMA | FP32；EMA decay 0.9999、warmups 2,000；梯度裁剪 10 |
-| 后处理 | score > 0.01；逐类 ProbIoU fast NMS，阈值 0.7；每图最多 300 框 |
+| O² 后处理 | top-300，无 NMS；score > 0.01；每图最多 300 框 |
 | 主指标 | ProbIoU 匹配，AP50、AP75、mAP@[.50:.95]；101 点插值后梯形积分 |
 | 评估与保存 | 每轮评估；按 AP50 保存 `best_stg1.pth`，另存 `last.pth` |
 | 随机种子 | 首组 seed 0；配对实验使用相同种子 |
@@ -30,50 +30,25 @@
 box/cls/DFL 损失系数套进不同结构的 criterion。
 
 矩形画布下，四个长度/中心坐标统一除以 `S=max(W,H)=1216`，角度仍除以 π。
-decoder anchors、旋转采样、BCSR、原图框恢复共同使用该坐标约定，避免分别除以宽高
+decoder anchors、旋转采样、光谱分支取样、原图框恢复共同使用该坐标约定，避免分别除以宽高
 后改变旋转矩形几何。默认旧配置仍使用原坐标模式。
 
-评估额外保存同一批预测的几何旋转 IoU 指标，字段前缀为 `riou_`，供定位分析使用。
+`--geometric` 可额外计算同一批预测的几何旋转 IoU 指标，字段前缀为 `riou_`，供定位分析使用；日常评估不重复计算这组指标。
 这些字段采用同样的匹配与积分方式。通用 `DotaOBBEvaluator` 仍供其他数据集的
 DOTA 协议使用；MODA 主配方的 checkpoint 选择指标明确为 AP50。
 
-## 双 3090 运行
+## 基线、创新与双 3090 运行
 
-先补齐 `data/MODA/train/images`。当前本地只有 1,000 张训练图，完整配置会报缺图，
-不会自动缩成已有图子集。无需安装新包。
+所有命令统一维护在 [实验运行指南](RUN_EXPERIMENTS.md)：基线、普通光谱聚合、嵌入通道对角统计、去对象约束和完整方法各有独立入口；支持预检、训练、续训、评估和源像素可视化。
 
 ```bash
 conda activate wyq-deim
-CUDA_VISIBLE_DEVICES=0,1 torchrun --standalone --nproc_per_node=2 train.py -c configs/experiments/moda/dfine_obb_o2_fressdet.yml --seed 0
+python tools/experiments/moda.py list
+python tools/experiments/moda.py train baseline --gpus 0,1 --seed 0
+python tools/experiments/moda.py train full --gpus 0,1 --seed 0
 ```
 
-BCSR 主方法使用同一配方：
-
-```bash
-CUDA_VISIBLE_DEVICES=0,1 torchrun --standalone --nproc_per_node=2 train.py -c configs/incubator/bcsr/moda_edge_fressdet.yml --seed 0
-```
-
-整框共享路由和固定初始框消融分别使用 `moda_object_fressdet.yml`、
-`moda_initial_fressdet.yml`。更多种子用独立 `--output-dir`。命令显式传 `--seed 0`，
-因为通用训练 CLI 的默认 seed 42 会覆盖 YAML 字段。
-
-复查最佳 checkpoint：
-
-```bash
-python train.py -c configs/incubator/bcsr/moda_edge_fressdet.yml --test-only -r logs/research/bcsr/moda_edge_fressdet/best_stg1.pth --seed 0 --output-dir logs/research/bcsr/moda_edge_fressdet_test
-```
-
-目标机器先测密集样本的 FP32 显存：
-
-```bash
-CUDA_VISIBLE_DEVICES=0 python tools/dataset/moda_preflight.py --config configs/incubator/bcsr/moda_edge_fressdet.yml --device cuda:0 --height 928 --width 1216 --queries 500 --batch-size 4 --steps 4 --dense --output logs/research/bcsr/paper_protocol_dense_cuda.json
-```
-
-preflight 为检查指定画布，会将样本 resize 到该画布；正式配方使用原始大小再补边。
-它覆盖密集 GT 的动态 DN 数量，但不包含 EMA、DDP 通信缓冲区或验证集全量求值的
-总开销，正式运行还需短程测量。双 3090 的峰值显存和 12 小时完成性尚未验证。
-如需 AMP，可在配对训练命令中共同加 `-u use_amp=True` 并使用新输出目录；显存不足时
-先检查实际峰值，再决定调整，不在代码中静默降 batch 或输入尺寸。
+正式运行前在目标机器执行指南中的 `preflight --full-size --batch-size 4 --dense`。这条预检保留论文配方的原图 resize/pad 顺序；CPU 小画布预检仅检查代码。双 3090 峰值显存和完整训练耗时仍需目标机器实测。
 
 ## 已完成验证
 

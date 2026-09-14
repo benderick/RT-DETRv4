@@ -10,21 +10,23 @@ checkpoint_freq: 1
 seed: 0
 use_amp: False
 use_ema: True
-clip_max_norm: 10.0
+clip_max_norm: 2.0
 HGNetv2:
   in_channels: 8
-  pretrained: False
+  pretrained: True
+  local_model_dir: ./pretrain/hgnetv2/
   freeze_at: -1
   freeze_norm: False
 RotatedDFINETransformer:
   num_queries: 500
   box_coordinate_mode: isotropic
-num_top_queries: 4000
+
+num_top_queries: 300
 RotatedPostProcessor:
-  num_top_queries: 4000
+  num_top_queries: 300
   score_threshold: 0.01
   max_detections: 300
-  apply_nms: True
+  apply_nms: False
   nms_method: probiou_fast
   nms_iou_threshold: 0.7
 evaluator:
@@ -32,30 +34,40 @@ evaluator:
   type: BenchmarkOBBEvaluator
   selection_metric: AP50
   require_complete: True
+  compute_geometric: False
 optimizer:
   type: AdamW
-  lr: 0.01
-  betas: [0.937, 0.999]
-  weight_decay: 0.0005
   params:
-    - {params: '.*bias$', weight_decay: 0.0, warmup_start_lr: 0.1}
-    - {params: '^(?!.*bias$).*$', module_pattern: 'Norm', weight_decay: 0.0, warmup_start_lr: 0.0}
-    - {params: '^(?!.*bias$).*$', exclude_module_pattern: 'Norm', warmup_start_lr: 0.0}
+    - {params: '^(?=.*backbone)(?!.*norm|bn).*$', lr: 0.00002}
+    - {params: '^(?=.*backbone)(?=.*norm|bn).*$', lr: 0.00002, weight_decay: 0.0}
+    - {params: '^(?=.*(?:encoder|decoder))(?=.*(?:norm|bn|bias)).*$', weight_decay: 0.0}
+  lr: 0.0002
+  betas: [0.9, 0.999]
+  weight_decay: 0.0001
+
 lr_scheduler:
-  __replace__: True
-  type: LinearEpochLR
-  total_epochs: 20
-  final_ratio: 0.01
+  type: MultiStepLR
+  milestones: [500]
+  gamma: 0.1
 lr_warmup_scheduler:
-  type: GroupLinearWarmup
-  warmup_duration: 3435 # 3 * ceil(9156/8), including the final partial batch
-ema:
-  decay: 0.9999
-  warmups: 2000
+  type: LinearWarmup
+  warmup_duration: 500
+
+
 diagnostics_detailed_epoch_interval: 5
-diagnostics_layerwise_epoch_interval: 5
-diagnostics_detailed_image_limit: 16
+diagnostics_layerwise_epoch_interval: 0
+diagnostics_detailed_image_limit: 0
+diagnostics_eval_records: compact
 diagnostics_query_topk: 20
+diagnostics_source_evidence:
+  enabled: True
+  seed: 20260913
+  population_images: 96
+  gallery_per_class: 2
+  epoch_interval: 5
+  query_topk: 20
+  save_initial: True
+  render: True
 train_dataloader:
   total_batch_size: 8
   drop_last: False

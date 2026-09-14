@@ -1,4 +1,4 @@
-"""Optional geometry context must preserve both stable decoder paths."""
+"""Optional query context must preserve both stable decoder paths."""
 import copy
 import tempfile
 import unittest
@@ -14,11 +14,11 @@ from test.framework.model.test_model_pipeline import build_tiny_model, build_cri
 
 class ZeroAdapter(nn.Module):
     def forward(self, queries, references, context, layer):
-        context.append((layer, references.detach().clone()))
+        context.setdefault("events",[]).append((layer, references.detach().clone()))
         return torch.zeros_like(queries)
 
 
-class GeometryAdapterTest(unittest.TestCase):
+class QueryAdapterTest(unittest.TestCase):
     def test_config_and_registry_are_isolated_across_datasets(self):
         baseline_path = "configs/experiments/uav_rod/dfine_obb_o2.yml"
         expected = YAMLConfig(baseline_path).yaml_cfg
@@ -33,7 +33,7 @@ class GeometryAdapterTest(unittest.TestCase):
             torch.manual_seed(17)
             baseline = build_tiny_model(refinement_mode=mode)
             extended = copy.deepcopy(baseline)
-            extended.geometry_adapter = ZeroAdapter()
+            extended.query_adapter = ZeroAdapter()
             self.assertEqual(set(baseline.state_dict()), set(extended.state_dict()))
             extended.load_state_dict(baseline.state_dict(), strict=True)
             features = [torch.randn(2, 32, n, n) for n in (8, 4, 2)]
@@ -45,9 +45,9 @@ class GeometryAdapterTest(unittest.TestCase):
                 torch.manual_seed(31)
                 left = baseline(features, targets)
                 torch.manual_seed(31)
-                context = []
+                context = {}
                 right = extended(features, targets, context=context)
-                self.assertEqual(len(context), 2)
+                self.assertEqual(len(context["events"]), 2)
                 for key in ("pred_boxes", "pred_logits"):
                     torch.testing.assert_close(left[key], right[key], rtol=0, atol=0)
                 if training:

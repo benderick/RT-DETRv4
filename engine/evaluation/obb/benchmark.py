@@ -5,6 +5,9 @@ The protocol name describes executed code, not a claim of paper reproduction.
 """
 import numpy as np
 import torch
+import csv
+import time
+from pathlib import Path
 
 from ...core import register
 from ...rtv4.rotated_box_ops import rotated_iou
@@ -83,18 +86,26 @@ therefore NOT the old DOTA-07 metric. Unsupported ignore semantics fail loudly.
 """
     STAT_NAMES = ("mAP50_95", "AP50", "AP75", "riou_mAP50_95", "riou_AP50", "riou_AP75")
 
-    def __init__(self, dataset, selection_metric="AP50", require_complete=True):
+    def __init__(self, dataset, selection_metric="AP50", require_complete=True, compute_geometric=True):
         self.require_complete = bool(require_complete)
+        self.compute_geometric = bool(compute_geometric)
+        if not self.compute_geometric and selection_metric.startswith("riou_"):
+            raise ValueError("Geometric checkpoint selection requires compute_geometric=True")
         self.protocol = "ultralytics_obb_probiou_interp101_trapz_v1"
         # Match the reference's float32 torch.linspace thresholds exactly.
         super().__init__(dataset,iou_thresholds=torch.linspace(.5,.95,10).tolist(),
                          use_07_metric=False,selection_metric=selection_metric)
 
     def accumulate(self, verbose=True):
+        started = time.perf_counter()
         if self.require_complete and set(self.predictions) != set(range(len(self.dataset))):
             raise ValueError("Benchmark OBB evaluation requires a prediction entry for every image")
         truths, labels, scores = [],[],[]
-        correctness = {"probiou":[],"riou":[]}
+        correctness = {"probiou":[]}
+        overlaps = [("probiou", pairwise_probiou)]
+        if self.compute_geometric:
+            correctness["riou"] = []
+            overlaps.append(("riou", lambda a,b: rotated_iou(a,b,model_space=False)))
         for image_id in range(len(self.dataset)):
             gt = self.dataset.get_ground_truth(image_id)
             if gt["difficulty"].bool().any() or len(gt.get("ignore_boxes",[])):
@@ -103,8 +114,7 @@ therefore NOT the old DOTA-07 metric. Unsupported ignore semantics fail loudly.
             truths.append(gt["labels"].cpu().numpy())
             labels.append(prediction["labels"].numpy())
             scores.append(prediction["scores"].numpy())
-            for name, overlap in (("probiou",pairwise_probiou),
-                                  ("riou",lambda a,b: rotated_iou(a,b,model_space=False))):
+            for name, overlap in overlaps:
                 similarity = overlap(gt["boxes"].float().cpu(),prediction["boxes"])
                 correctness[name].append(benchmark_matches(similarity,gt["labels"].cpu(),prediction["labels"],self.iou_thresholds))
         truth = np.concatenate(truths) if truths else np.empty(0,dtype=int)
@@ -125,16 +135,18 @@ therefore NOT the old DOTA-07 metric. Unsupported ignore semantics fail loudly.
                 precision = cum_tp/(cum_tp+cum_fp)
                 ap[index] = [benchmark_ap(recall[:,j],precision[:,j]) for j in range(10)]
             results[name] = ap
-        primary, geometric = results["probiou"],results["riou"]
+        primary = results["probiou"]
         summary = lambda ap: [float(ap.mean()),float(ap[:,0].mean()),float(ap[:,5].mean())] if len(ap) else [0.,0.,0.]
-        self.stats = np.asarray(summary(primary)+summary(geometric))
+        self.stats = np.asarray(summary(primary)+(summary(results["riou"]) if self.compute_geometric else []))
         self.metrics = dict(zip(self.STAT_NAMES,map(float,self.stats)))
         self.per_class = dict.fromkeys(self.dataset.classes)
         self.per_class_metrics = {}
         for row,class_id in enumerate(class_ids):
             name = self.dataset.classes[int(class_id)]
             self.per_class[name] = float(primary[row,0])
-            self.per_class_metrics[name] = dict(zip(self.STAT_NAMES,summary(primary[row:row+1])+summary(geometric[row:row+1])))
+            self.per_class_metrics[name] = dict(zip(self.STAT_NAMES,summary(primary[row:row+1])+
+                (summary(results["riou"][row:row+1]) if self.compute_geometric else [])))
+        self.accumulation_seconds = time.perf_counter()-started
         if verbose:
             print(f"Benchmark OBB: {len(self.dataset)} images; {self.protocol}")
 
@@ -142,3 +154,24 @@ therefore NOT the old DOTA-07 metric. Unsupported ignore semantics fail loudly.
         print(f"{self.protocol}; checkpoint selection={self.selection_metric}")
         for name,value in self.metrics.items():
             print(f"  {name}: {value:.6f}")
+        headings, values = self.paper_row()
+        print("  " + " | ".join(headings) + " (percent)")
+        print("  " + " | ".join("--" if value is None else f"{value:.2f}" for value in values))
+
+    def paper_row(self):
+        classes = ("car","bus","van","awning-bike","truck","tricycle","bike","pedestrian")
+        headings = ("Car","Bus","Van","Awi.","Tru.","Tri.","Bike","Ped.","mAP50","mAP75","mAP")
+        values = [self.per_class.get(name) for name in classes]
+        values += [self.metrics.get(key) for key in ("AP50","AP75","mAP50_95")]
+        return headings, [None if value is None else 100*value for value in values]
+
+    def export_paper_table(self, directory):
+        directory = Path(directory)
+        headings, values = self.paper_row()
+        with (directory/"paper_metrics.csv").open("w",newline="") as handle:
+            writer=csv.writer(handle);writer.writerow(headings);writer.writerow(values)
+        (directory/"paper_metrics.md").write_text(
+            "AP50 per class; overall mAP50, mAP75, mAP@[.50:.95]. Values in percent.\n\n"
+            "| " + " | ".join(headings) + " |\n| " + " | ".join(["---"]*len(headings)) + " |\n| " +
+            " | ".join("—" if v is None else f"{v:.2f}" for v in values) + " |\n\n"
+            + self.protocol + "\n")
