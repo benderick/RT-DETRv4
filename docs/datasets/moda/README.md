@@ -11,4 +11,4 @@ python tools/experiments/moda.py eval rgb
 八波段将 `rgb` 换成 `baseline`。默认 GPU 0,1、20 轮、batch 8、FP32；用 `--gpus` 指定卡。
 训练自动评估并保存指标和诊断；验证默认用最佳权重。`--checkpoint 路径` 可指定验证权重或续训。
 结果位于 `logs/moda/experiments/<baseline或rgb>/seed0_fp32/`，报告各类 AP50 和整体 mAP50/mAP75/mAP（ProbIoU）。
-伪 RGB 保留 B4/B2/B1，现有八输入模型的其余五路在训练和验证时恒为零。
+伪 RGB 在 Dataset 中按 B4/B2/B1 读取为三个通道，原始数据文件保持不变。

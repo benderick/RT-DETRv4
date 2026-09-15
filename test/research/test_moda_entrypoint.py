@@ -37,10 +37,23 @@ class MODAEntrypointTest(unittest.TestCase):
             rgb.pop(key, None)
         for key in ("train_dataloader", "val_dataloader"):
             dataset = rgb[key]["dataset"]
-            self.assertEqual(dataset.pop("retained_bands"), [4, 2, 1])
-            self.assertEqual(dataset["type"], "MODAInformationControl")
+            self.assertEqual(dataset["type"], "MODARGBDetection")
             dataset["type"] = "MODADetection"
+        self.assertEqual(rgb["HGNetv2"]["in_channels"], 3)
+        self.assertEqual(baseline["HGNetv2"]["in_channels"], 8)
+        rgb["HGNetv2"]["in_channels"] = 8
+        self.assertEqual(rgb["diagnostics_source_evidence"]["pseudo_rgb_bands"], [0, 1, 2])
+        rgb["diagnostics_source_evidence"]["pseudo_rgb_bands"] = [4, 2, 1]
         self.assertEqual(baseline, rgb)
+
+    def test_rejects_old_eight_input_rgb_checkpoint(self):
+        checkpoint = self.checkpoint("rgb")
+        metadata = checkpoint.parent / "configs.json"
+        saved = json.loads(metadata.read_text())
+        saved["yaml_cfg"]["HGNetv2"]["in_channels"] = 8
+        metadata.write_text(json.dumps(saved))
+        with self.assertRaisesRegex(ValueError, "input width"):
+            moda.command(self.args("eval", "rgb"))
 
     def test_train_launches_directly_and_dry_run_writes_nothing(self):
         for variant in moda.EXPERIMENTS:

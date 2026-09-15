@@ -56,13 +56,14 @@ def make_panel(dataset, seed=20260913, population_images=96, gallery_per_class=2
         source_annotation_sha256=dataset.get_dataset_provenance().get('source_annotation_sha256'))
 
 
-def render_record(image, record, output, title, gt_box=None, limits=None, display_bands=(4,2,1)):
+def render_record(image, record, output, title, gt_box=None, limits=None, display_bands=(4,2,1), source_bands=None):
     """Source-pixel panels with fixed numeric scales for matched comparisons."""
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     from ..rtv4.rotated_box_ops import rbox_to_corners
     image=np.asarray(image);_,height,width=image.shape
+    source_bands=tuple(range(image.shape[0])) if source_bands is None else tuple(source_bands)
     canvas=np.array([width,height])
     points=record['attention_points']*canvas
     positions=points.reshape(-1,2)
@@ -82,12 +83,14 @@ def render_record(image, record, output, title, gt_box=None, limits=None, displa
     fig,ax=plt.subplots(figsize=(7,6),layout='constrained');source(ax)
     if polygon is not None:
         outline=np.concatenate((polygon,polygon[:1]));ax.plot(*outline.T,color='#00ffff',linewidth=1)
-    ax.set_title('Pseudo RGB: R=B%d, G=B%d, B=B%d'%tuple(display_bands))
+    ax.set_title('Pseudo RGB: R=B%d, G=B%d, B=B%d'%tuple(source_bands[b] for b in display_bands))
     fig.suptitle(title,fontsize=9)
     fig.savefig(output.with_name(output.name+'_rgb.png'),dpi=150);plt.close(fig)
-    fig,axes=plt.subplots(2,4,figsize=(14,7),layout='constrained')
+    columns=min(4,image.shape[0]);rows=(image.shape[0]+columns-1)//columns
+    fig,axes=plt.subplots(rows,columns,figsize=(3.5*columns,3.5*rows),layout='constrained',squeeze=False)
     for band,ax in enumerate(axes.flat):
-        source(ax,band);ax.set_title(f'B{band}: observed input')
+        if band>=image.shape[0]:ax.axis('off');continue
+        source(ax,band);ax.set_title(f'B{source_bands[band]}: observed input')
         if polygon is not None:
             outline=np.concatenate((polygon,polygon[:1]));ax.plot(*outline.T,color='#00ffff',linewidth=.7)
     fig.suptitle(title+'\nAnnotation contour is for identification only; band coordinates are not realigned.',fontsize=10)
@@ -210,12 +213,14 @@ class SourceEvidenceRecorder:
                     canvas_gt[:2]=canvas_gt[:2]*target['scale_factor']+target['padding'][:2]
                     canvas_gt[2:4]*=target['scale_factor'].mean()
                     render_record(image.numpy(),record,directory/stem,title,canvas_gt.numpy(),
-                        display_bands=self.settings.get('pseudo_rgb_bands',(4,2,1)))
+                        display_bands=self.settings.get('pseudo_rgb_bands',(4,2,1)),
+                        source_bands=getattr(self.dataset,'source_bands',None))
                 artifacts.append({**item,'query_index':q,'row':row,'archive':f'{name}.npz',
                                   'rgb':stem+'_rgb.png','bands':stem+'_bands.png','mechanism':stem+'_mechanism.png'})
             _write_json(directory/f'{name}.json',dict(image_name=name,image_id=index,
                 source_path=str(self.dataset.images[index]),source_sha256=hashlib.sha256(self.dataset.images[index].read_bytes()).hexdigest(),
                 canvas_hw=list(image.shape[-2:]),scale_factor=target['scale_factor'],padding=target['padding'],
+                source_bands=list(getattr(self.dataset,'source_bands',range(image.shape[0]))),
                 box_normalization_size=target.get('box_normalization_size',target['size']),
                 method='baseline', schema='decoder-attention-v1',
                 model_source=model_source,epoch=epoch,selection='all Hungarian matches plus top class-score queries; matching only after inference'))

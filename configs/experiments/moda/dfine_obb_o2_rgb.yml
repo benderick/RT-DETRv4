@@ -1,13 +1,16 @@
 __include__: [./dfine_obb_o2_fressdet.yml]
-imports: [engine.data.dataset.moda_information_control]
+imports: [engine.data.dataset.moda_rgb_dataset]
 output_dir: ./logs/moda/experiments/rgb/seed0_fp32
 
-# Keep the existing eight-input model; only B1/B2/B4 carry source pixels.
+HGNetv2:
+  in_channels: 3
+diagnostics_source_evidence:
+  pseudo_rgb_bands: [0, 1, 2]
+
+# Dataset returns [B4, B2, B1]; source arrays and model code stay unchanged.
 train_dataloader:
   dataset:
-    type: MODAInformationControl
-    retained_bands: [4, 2, 1]
+    type: MODARGBDetection
 val_dataloader:
   dataset:
-    type: MODAInformationControl
-    retained_bands: [4, 2, 1]
+    type: MODARGBDetection

@@ -1,4 +1,4 @@
-"""Scientific control invariants: withheld information cannot reach the model."""
+"""Three-channel input order, source immutability and label preservation."""
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,10 +7,10 @@ import numpy as np
 import torch
 
 from engine.data.dataset.moda_dataset import MODADetection
-from engine.data.dataset.moda_information_control import MODAInformationControl
+from engine.data.dataset.moda_rgb_dataset import MODARGBDetection
 
 
-class InformationControlTest(unittest.TestCase):
+class MODARGBTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -23,7 +23,7 @@ class InformationControlTest(unittest.TestCase):
         (self.root / "labels/object.txt").write_text("3 4 13 4 13 12 3 12 car 2\n")
 
     def test_withheld_pixels_have_no_effect_and_selected_pixels_do(self):
-        control = MODAInformationControl(self.root)
+        control = MODARGBDetection(self.root)
         original, target = control[0]
         changed = self.source.copy()
         changed[[0, 3, 5, 6, 7]] = 255 - changed[[0, 3, 5, 6, 7]]
@@ -35,9 +35,9 @@ class InformationControlTest(unittest.TestCase):
         np.save(self.path, self.source)
         baseline = MODADetection(self.root)
         full, full_target = baseline[0]
-        torch.testing.assert_close(original[[1, 2, 4]], full[[1, 2, 4]], rtol=0, atol=0)
-        self.assertEqual(torch.count_nonzero(original[[0, 3, 5, 6, 7]]).item(), 0)
-        self.assertEqual(original.shape, full.shape)
+        torch.testing.assert_close(original, full[[4, 2, 1]], rtol=0, atol=0)
+        self.assertEqual(original.shape, (3, 24, 32))
+        self.assertTrue(original.is_contiguous())
         for key in target:
             if torch.is_tensor(target[key]):
                 torch.testing.assert_close(target[key], full_target[key], rtol=0, atol=0)
@@ -47,19 +47,16 @@ class InformationControlTest(unittest.TestCase):
         self.assertEqual(target["source_difficulty"].item(), 2)
         self.assertEqual(baseline.get_ground_truth(0)["labels"].tolist(), [0])
         record = control.get_dataset_provenance()
-        self.assertEqual(record["retained_source_bands"], [1, 2, 4])
-        self.assertEqual(record["input_channels"], 8)
+        self.assertEqual(record["retained_source_bands"], [4, 2, 1])
+        self.assertEqual(record["input_channels"], 3)
 
-    def test_all_bands_recovers_original_loader_exactly(self):
-        full, target = MODADetection(self.root)[0]
-        same, _ = MODAInformationControl(self.root, retained_bands=list(range(8)))[0]
-        torch.testing.assert_close(same, full, rtol=0, atol=0)
+    def test_reading_rgb_preserves_source_bytes_and_eight_band_baseline(self):
+        before = self.path.read_bytes()
+        MODARGBDetection(self.root)[0]
+        self.assertEqual(self.path.read_bytes(), before)
+        full, _ = MODADetection(self.root)[0]
+        torch.testing.assert_close(full, torch.from_numpy(self.source.transpose(0, 2, 1).copy()), rtol=0, atol=0)
         np.testing.assert_array_equal(np.load(self.path), self.source)
-
-    def test_invalid_band_identity_is_rejected(self):
-        for bands in ([], [1, 1], [True, 2, 4], [-1], [8], [1.0], "421"):
-            with self.subTest(bands=bands), self.assertRaises(ValueError):
-                MODAInformationControl(self.root, retained_bands=bands)
 
 
 if __name__ == "__main__":

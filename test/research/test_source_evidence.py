@@ -11,6 +11,7 @@ import torch.nn as nn
 from torch.nn import functional as F
 
 from engine.data.dataset.moda_dataset import MODADetection
+from engine.data.dataset.moda_rgb_dataset import MODARGBDetection
 from engine.data.transforms.rotated_transforms import RotatedConvertToTensor
 from engine.diagnostics import OBBDiagnostics
 from engine.diagnostics.source_evidence import SourceEvidenceRecorder,make_panel,render_record
@@ -28,17 +29,17 @@ class TensorTransform:
 
 
 class TinyBaselineBackbone(nn.Module):
-    def __init__(self):
+    def __init__(self,in_channels=8):
         super().__init__()
-        self.conv=nn.Conv2d(8,32,3,stride=8,padding=1)
+        self.conv=nn.Conv2d(in_channels,32,3,stride=8,padding=1)
 
     def forward(self,images):
         first=self.conv(images)
         return [first,F.avg_pool2d(first,2),F.avg_pool2d(first,4)]
 
 
-def tiny_baseline_model():
-    return RTv4(TinyBaselineBackbone(),nn.Identity(),build_tiny_model())
+def tiny_baseline_model(in_channels=8):
+    return RTv4(TinyBaselineBackbone(in_channels),nn.Identity(),build_tiny_model())
 
 
 def dataset_at(root):
@@ -50,6 +51,25 @@ def dataset_at(root):
 
 
 class SourceEvidenceTest(unittest.TestCase):
+    def test_three_channel_capture_and_band_display(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);dataset_at(root)
+            dataset=MODARGBDetection(root,transforms=TensorTransform())
+            settings=dict(enabled=True,population_images=0,gallery_per_class=1,
+                          render=True,query_topk=1,pseudo_rgb_bands=(0,1,2))
+            recorder=SourceEvidenceRecorder(settings,root/'run',dataset,dataset.transforms,20)
+            model=tiny_baseline_model(3).eval()
+            post=RotatedPostProcessor(num_classes=3,num_top_queries=20,apply_nms=False)
+            recorder.capture(model,build_criterion(),post,torch.device('cpu'),-1,'model')
+            stage=root/'run/diagnostics/source_evidence/initial'
+            item=json.loads((stage/'gallery.json').read_text())[0]
+            self.assertTrue((stage/item['rgb']).is_file())
+            self.assertTrue((stage/item['bands']).is_file())
+            metadata=json.loads((stage/(item['image_name']+'.json')).read_text())
+            self.assertEqual(metadata['source_bands'],[4,2,1])
+            with np.load(root/'run/diagnostics/source_evidence/sources'/(item['image_name']+'.npz')) as pixels:
+                self.assertEqual(pixels['image_uint8'].shape[0],3)
+
     def test_fixed_population_gallery_and_observation_preserves_model_rng(self):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder);dataset=dataset_at(root)

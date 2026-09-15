@@ -30,20 +30,21 @@ def parser():
 
 
 def check_checkpoint(checkpoint, args):
-    """Equal weight shapes cannot identify which input bands were trained."""
+    """Check the saved dataset and input width before resuming or evaluating."""
     if not checkpoint.is_file():
         raise ValueError(f"Checkpoint not found: {checkpoint}")
     metadata = checkpoint.parent / "configs.json"
     if not metadata.is_file():
         raise ValueError(f"Keep configs.json beside the checkpoint: {metadata}")
     cfg = json.loads(metadata.read_text())["yaml_cfg"]
-    expected = "MODADetection" if args.variant == "baseline" else "MODAInformationControl"
+    expected = "MODADetection" if args.variant == "baseline" else "MODARGBDetection"
     for split in ("train_dataloader", "val_dataloader"):
         dataset = cfg[split]["dataset"]
         if dataset["type"] != expected:
             raise ValueError(f"Checkpoint input does not match {args.variant}")
-        if args.variant == "rgb" and sorted(dataset.get("retained_bands", [])) != [1, 2, 4]:
-            raise ValueError("Checkpoint does not use pseudo RGB [4,2,1]")
+    channels = 8 if args.variant == "baseline" else 3
+    if cfg["HGNetv2"].get("in_channels") != channels:
+        raise ValueError(f"Checkpoint input width does not match {args.variant} ({channels} channels)")
     if cfg.get("use_amp", False):
         raise ValueError("This entry uses FP32; checkpoint uses AMP")
     if args.action == "train" and cfg.get("seed", args.seed) != args.seed:
@@ -85,7 +86,7 @@ def command(args):
              f"val_dataloader.num_workers={args.workers}"]
     spec = dict(variant=args.variant, seed=args.seed, precision="fp32", config=str(config),
                 global_batch=8, epochs=20, gpus=gpu_ids, postprocess="detr", command=argv,
-                retained_source_bands=list(range(8)) if args.variant == "baseline" else [1, 2, 4])
+                retained_source_bands=list(range(8)) if args.variant == "baseline" else [4, 2, 1])
     return argv, env, (run, spec) if args.action == "train" and checkpoint is None else None
 
 
