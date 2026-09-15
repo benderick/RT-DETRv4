@@ -62,7 +62,7 @@ CUDA_VISIBLE_DEVICES=3 python train.py -c configs/dfine/dfine_obb_angle.yml
 
 数据集 benchmark 配方可以显式选择无随机增强；例如 MODA 的 FressDet 论文设置
 仅采用 `resize -> pad -> tensor`，详见
-[MODA 配方](../datasets/moda/fressdet_alignment.md)。该矩形画布入口统一以最长边归一化
+[MODA 入口](../datasets/moda/README.md)。该矩形画布入口统一以最长边归一化
 OBB 的中心和边长，旋转 attention 再转换到特征图各轴的采样坐标；坐标选项及元数据
 要求见 [集成契约](INTEGRATION_CONTRACT.md)。
 

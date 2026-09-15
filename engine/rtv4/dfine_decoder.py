@@ -665,8 +665,7 @@ class DFINETransformer(nn.Module):
                            memory: torch.Tensor,
                            spatial_shapes,
                            denoising_logits=None,
-                           denoising_bbox_unact=None,
-                           proposal_context=None):
+                           denoising_bbox_unact=None):
 
         # prepare input for decoder
         if self.training or self.eval_spatial_size is None:
@@ -683,12 +682,6 @@ class DFINETransformer(nn.Module):
 
         output_memory :torch.Tensor = self.enc_output(memory)
         enc_outputs_logits :torch.Tensor = self.enc_score_head(output_memory)
-
-        if proposal_context is not None:
-            # Reuse the existing P3 prediction. No extra head, no GT/DN boxes,
-            # and no gradient encouraging the detector to alter its mask.
-            height, width = spatial_shapes[0]
-            proposal_context["encoder_objectness"] = enc_outputs_logits[:, :height*width].detach().float().sigmoid().amax(-1).reshape(memory.shape[0],1,height,width)
 
         enc_topk_bboxes_list, enc_topk_logits_list = [], []
         enc_topk_memory, enc_topk_logits, enc_topk_anchors = \

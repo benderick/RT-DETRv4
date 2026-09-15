@@ -69,19 +69,6 @@ def main():
     # Exercise the same warmup policy as the trainer; jumping straight to the
     # final LR is not representative of a from-scratch paper-protocol run.
     warmup = cfg.lr_warmup_scheduler
-    adapter = getattr(model.decoder,"query_adapter",None)
-    branch_summary = {}
-    if adapter is not None:
-        model.decoder.decoder.diagnostic_mode = True
-        def capture_branch(module, inputs, output):
-            context,layer_index = inputs[2],inputs[3]
-            if layer_index!=module.apply_layer or layer_index not in context["records"]:
-                return
-            record=context["records"][layer_index]
-            for name in ("object_compatibility","evidence_gate","effective_background_support","residual_norm"):
-                value=record[name].detach().float()
-                branch_summary[name]={"mean":float(value.mean()),"min":float(value.min()),"max":float(value.max())}
-        adapter.register_forward_hook(capture_branch)
     scaler = cfg.scaler if args.amp else torch.cuda.amp.GradScaler(enabled=False)
     if device.type == "cuda":
         torch.cuda.reset_peak_memory_stats(device)
@@ -117,8 +104,7 @@ def main():
                       "amp_scale_before": scale_before, "amp_scale": scaler.get_scale(),
                       "skipped": bool(bad), "nonfinite_gradient_tensors": len(bad),
                       "nonfinite_gradient_examples": bad[:10],
-                      "group_lrs":[group["lr"] for group in optimizer.param_groups],
-                      "spectral_summary":dict(branch_summary) if adapter is not None else None})
+                      "group_lrs":[group["lr"] for group in optimizer.param_groups]})
         if warmup is not None:
             warmup.step()
         if not bad:
@@ -148,14 +134,6 @@ def main():
                   parameters=sum(p.numel() for p in model.parameters()),
                   peak_allocated_bytes=torch.cuda.max_memory_allocated(device) if device.type=="cuda" else None,
                   dataset=dataset.get_dataset_provenance())
-    adapter = getattr(model.decoder,"query_adapter",None)
-    if adapter is not None:
-        report["spectral_evidence"] = {
-            "mode":adapter.mode,"apply_layer":adapter.apply_layer,
-            "parameters":sum(p.numel() for p in adapter.parameters()),
-            "gradient_l1":{n:float(p.grad.abs().sum()) if p.grad is not None else None
-                           for n,p in adapter.named_parameters()},
-            "diagnostic_schema":result.get("diagnostic_query_extensions",{}).get("schema_version")}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2)+"\n")
     print(json.dumps(report, indent=2))

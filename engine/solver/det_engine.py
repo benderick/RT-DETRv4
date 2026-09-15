@@ -491,9 +491,6 @@ def train_one_epoch(self_lr_scheduler, lr_scheduler, model: torch.nn.Module, cri
         diagnostic_step = diagnostics is not None and diagnostics.enabled and (
             diagnostics.should_log_train(global_step)
         )
-        train_decoder = getattr(dist_utils.de_parallel(model), "decoder", None)
-        if train_decoder is not None and getattr(train_decoder, "query_adapter", None) is not None:
-            train_decoder.collect_train_diagnostics = bool(diagnostic_step)
         if diagnostic_step and device.type == "cuda" and torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats(device)
         step_start = _synchronize_for_measurement(device, diagnostic_step)
@@ -737,10 +734,7 @@ def evaluate(model: torch.nn.Module, criterion: torch.nn.Module, postprocessor,
                 diagnostics.needs_layerwise_eval() or capture_attention,
                 capture_attention=capture_attention,
             )
-        if getattr(dist_utils.de_parallel(model), "requires_image_context", False):
-            outputs = model(samples, targets=targets)
-        else:
-            outputs = model(samples)
+        outputs = model(samples)
         forward_end = _synchronize_for_measurement(device, diagnostic_eval)
 
         if 'rbox' in iou_types:

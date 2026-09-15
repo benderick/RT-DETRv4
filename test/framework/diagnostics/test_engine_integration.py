@@ -70,12 +70,6 @@ class _ToyDetector(nn.Module):
                     output["pred_logits"] - .1, output["pred_logits"])),
                 "diagnostic_layer_boxes": torch.stack((
                     layer0_boxes, output["pred_boxes"])),
-                "diagnostic_query_extensions": {
-                    "schema_version": "toy-method-v1",
-                    "moment_names": ("x", "y"),
-                    "head_moments": torch.zeros(2, batch, 2, 2, 2),
-                    "residual_norm": torch.ones(2, batch, 2),
-                },
             })
         return output
 
@@ -254,20 +248,6 @@ class DiagnosticEngineIntegrationTest(unittest.TestCase):
                 "score_threshold", "topk_truncation", "rotated_nms",
                 "max_detections", "final_assignment",
             })
-            with gzip.open(next(eval_dir.glob("queries.rank*.jsonl.gz")), "rt") as handle:
-                query_record = json.loads(handle.readline())
-            method_records = [
-                stage.get("method_diagnostics")
-                for stage in query_record["stages"]
-                if stage.get("stage") == "decoder_layer"
-            ]
-            self.assertTrue(method_records)
-            self.assertTrue(all(
-                record["schema_version"] == "toy-method-v1"
-                and record["moment_names"] == ["x", "y"]
-                and len(record["head_moments"]) == 2
-                for record in method_records
-            ))
             with (eval_dir / "metrics.json").open(encoding="utf-8") as handle:
                 metrics = json.load(handle)
             self.assertIn("AP50_DOTA07", metrics["metrics"])

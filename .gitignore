@@ -222,6 +222,7 @@ engine/data/dataset/*
 !engine/data/dataset/dota_obb_dataset.py
 !engine/data/dataset/uav_rod_dataset.py
 !engine/data/dataset/moda_dataset.py
+!engine/data/dataset/moda_information_control.py
 !engine/data/dataset/codrone_tiling.py
 !engine/data/transforms/
 engine/data/transforms/*

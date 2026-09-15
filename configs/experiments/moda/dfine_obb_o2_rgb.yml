@@ -1,0 +1,13 @@
+__include__: [./dfine_obb_o2_fressdet.yml]
+imports: [engine.data.dataset.moda_information_control]
+output_dir: ./logs/moda/experiments/rgb/seed0_fp32
+
+# Keep the existing eight-input model; only B1/B2/B4 carry source pixels.
+train_dataloader:
+  dataset:
+    type: MODAInformationControl
+    retained_bands: [4, 2, 1]
+val_dataloader:
+  dataset:
+    type: MODAInformationControl
+    retained_bands: [4, 2, 1]

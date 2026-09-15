@@ -53,7 +53,6 @@ class RotatedTransformerDecoder(TransformerDecoder):
         angle_head, score_head, query_pos_head, pre_bbox_head, integral, up,
         reg_scale, attn_mask=None, memory_mask=None, dn_meta=None,
         use_adr=False, adr_project=None,
-        query_adapter=None, query_context=None,
     ):
         output = target
         output_detach = pred_corners_undetach = angle_delta_undetach = 0
@@ -87,14 +86,6 @@ class RotatedTransformerDecoder(TransformerDecoder):
                 pre_scores = score_head[0](output)
                 initial_ref = pre_boxes.detach()
 
-            # The evidence update is shared by classification and geometry.
-            # The adapter activates at one configured layer; subsequent layers
-            # receive the updated instance representation.
-            if query_adapter is not None:
-                residual = query_adapter(output, ref_points_detach, query_context, index)
-                if residual.shape != output.shape:
-                    raise ValueError("Query adapter residual must have the same shape as query features")
-                output = output + residual
             # Retain D-FINE's fixed-anchor, cumulative-logit refinement.
             pred_corners = (
                 bbox_head[index](output + output_detach)
@@ -153,7 +144,7 @@ class RotatedTransformerDecoder(TransformerDecoder):
 class RotatedDFINETransformer(DFINETransformer):
     """D-FINE OBB decoder supporting direct-angle and O² ADR refinement."""
 
-    __inject__ = ["denoising_builder", "query_adapter"]
+    __inject__ = ["denoising_builder"]
 
     def __init__(
         self, num_classes=80, hidden_dim=256, num_queries=300,
@@ -172,7 +163,6 @@ class RotatedDFINETransformer(DFINETransformer):
         ocd_lambda5=0.3, ocd_lambda6=0.6,
         ocd_crowded_policy="strict_budget_random",
         denoising_builder=None,
-        query_adapter=None,
         box_coordinate_mode="per_axis",
     ):
         # Base initialization mutates feat_strides when extra levels are used;
@@ -210,15 +200,6 @@ class RotatedDFINETransformer(DFINETransformer):
         if denoising_builder is not None and not callable(denoising_builder):
             raise TypeError("denoising_builder must be callable or None")
         self.denoising_builder = denoising_builder
-        if query_adapter is not None and not isinstance(query_adapter, nn.Module):
-            raise TypeError("query_adapter must be a torch module or None")
-        if query_adapter is not None and layer_scale != 1:
-            raise ValueError("Query adapters currently require layer_scale=1")
-        self.query_adapter = query_adapter
-        if query_adapter is not None and not 1 <= query_adapter.apply_layer <= self.eval_idx:
-            raise ValueError("Query adapter must activate after the pre-head and at or before eval_idx")
-        if query_adapter is not None and getattr(query_adapter, "box_coordinate_mode", box_coordinate_mode) != box_coordinate_mode:
-            raise ValueError("Query adapter and decoder box coordinates must agree")
         self.ocd_lambdas = (
             float(ocd_lambda1), float(ocd_lambda2), float(ocd_lambda3),
             float(ocd_lambda4), float(ocd_lambda5), float(ocd_lambda6),
@@ -319,7 +300,6 @@ class RotatedDFINETransformer(DFINETransformer):
         spatial_shapes,
         attention_mask,
         dn_meta,
-        context=None,
     ):
         """Run the shared direct-angle/O² decoder."""
 
@@ -330,8 +310,6 @@ class RotatedDFINETransformer(DFINETransformer):
             attn_mask=attention_mask, dn_meta=dn_meta,
             use_adr=self.use_adr,
             adr_project=self.adr_project if self.use_adr else None,
-            query_adapter=self.query_adapter,
-            query_context=context,
         )
 
     def _build_denoising_group(self, targets):
@@ -365,18 +343,7 @@ class RotatedDFINETransformer(DFINETransformer):
             if builder is None else builder(**arguments)
         )
 
-    def build_context(self, images, targets=None):
-        if self.query_adapter is None:
-            return None
-        context = self.query_adapter.build_context(images, targets,
-            diagnostics=bool(self.decoder.diagnostic_mode))
-        context["train_summary"] = self.training and getattr(self, "collect_train_diagnostics", False)
-        context["ordinary_queries"] = self.num_queries
-        return context
-
-    def forward(self, feats, targets=None, context=None):
-        if self.query_adapter is not None and context is None:
-            raise ValueError("An enabled query adapter requires image context from RTv4")
+    def forward(self, feats, targets=None):
         memory, spatial_shapes = self._get_encoder_input(feats)
         if self.training and self.num_denoising > 0:
             dn_logits, dn_boxes, attention_mask, dn_meta = \
@@ -384,7 +351,7 @@ class RotatedDFINETransformer(DFINETransformer):
         else:
             dn_logits = dn_boxes = attention_mask = dn_meta = None
         content, refs, enc_boxes, enc_logits = self._get_decoder_input(
-            memory, spatial_shapes, dn_logits, dn_boxes, proposal_context=context)
+            memory, spatial_shapes, dn_logits, dn_boxes)
         decoded_refs = torch.sigmoid(refs)
         if self.use_adr and dn_meta is not None:
             # Released O² box noise keeps theta fixed while perturbing the
@@ -409,7 +376,7 @@ class RotatedDFINETransformer(DFINETransformer):
         (out_boxes, out_logits, out_corners, out_refs, pre_boxes, pre_logits,
          out_raw_logits, out_lqe_delta, out_input_refs) = \
             self._decode_queries(
-            content, refs, memory, spatial_shapes, attention_mask, dn_meta, context=context
+            content, refs, memory, spatial_shapes, attention_mask, dn_meta
         )
 
         if self.training and dn_meta is not None:
@@ -481,8 +448,6 @@ class RotatedDFINETransformer(DFINETransformer):
                         layer.cross_attn.last_attention_weights for layer in active_layers])
                     result["diagnostic_sampling_points_per_level"] = tuple(
                         active_layers[0].cross_attn.num_points_list)
-            if self.query_adapter is not None and self.decoder.diagnostic_mode:
-                result["diagnostic_query_extensions"] = self.query_adapter.diagnostics(context)
             return result
         if self.aux_loss:
             result["aux_outputs"] = self._set_aux_loss2(
@@ -500,6 +465,4 @@ class RotatedDFINETransformer(DFINETransformer):
                 if "method_diagnostics" in dn_meta:
                     result["method_train_diagnostics"] = \
                         dn_meta["method_diagnostics"]
-        if context is not None and context.get("train_summary"):
-            result.setdefault("method_train_diagnostics", {})["spectral_evidence"] = context.get("train_statistics")
         return result

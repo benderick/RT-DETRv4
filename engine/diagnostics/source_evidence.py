@@ -56,7 +56,7 @@ def make_panel(dataset, seed=20260913, population_images=96, gallery_per_class=2
         source_annotation_sha256=dataset.get_dataset_provenance().get('source_annotation_sha256'))
 
 
-def render_record(image, record, output, title, gt_box=None, limits=None):
+def render_record(image, record, output, title, gt_box=None, limits=None, display_bands=(4,2,1)):
     """Source-pixel panels with fixed numeric scales for matched comparisons."""
     import matplotlib
     matplotlib.use('Agg')
@@ -64,19 +64,27 @@ def render_record(image, record, output, title, gt_box=None, limits=None):
     from ..rtv4.rotated_box_ops import rbox_to_corners
     image=np.asarray(image);_,height,width=image.shape
     canvas=np.array([width,height])
-    points=record.get('candidate_points',record.get('attention_points'))*canvas
-    bg=record.get('background_points',np.empty((0,2)))*canvas
-    positions=np.concatenate((points.reshape(-1,2),bg.reshape(-1,2)),0)
+    points=record['attention_points']*canvas
+    positions=points.reshape(-1,2)
     polygon=None
     if gt_box is not None:
         polygon=rbox_to_corners(torch.as_tensor(gt_box,dtype=torch.float32)[None],normalized_angle=False)[0].numpy()
         positions=np.concatenate((positions,polygon))
     lower=np.clip(positions.min(0)-8,[0,0],[width-1,height-1])
     upper=np.clip(positions.max(0)+8,lower+1,[width,height])
-    def source(ax,band=4):
-        ax.imshow(image[band],cmap='gray',vmin=0,vmax=1,interpolation='nearest')
+    def source(ax,band=None):
+        if band is None:
+            ax.imshow(image[list(display_bands)].transpose(1,2,0),vmin=0,vmax=1,interpolation='nearest')
+        else:
+            ax.imshow(image[band],cmap='gray',vmin=0,vmax=1,interpolation='nearest')
         ax.set_xlim(lower[0],upper[0]);ax.set_ylim(upper[1],lower[1]);ax.tick_params(labelsize=7)
     output=Path(output);output.parent.mkdir(parents=True,exist_ok=True)
+    fig,ax=plt.subplots(figsize=(7,6),layout='constrained');source(ax)
+    if polygon is not None:
+        outline=np.concatenate((polygon,polygon[:1]));ax.plot(*outline.T,color='#00ffff',linewidth=1)
+    ax.set_title('Pseudo RGB: R=B%d, G=B%d, B=B%d'%tuple(display_bands))
+    fig.suptitle(title,fontsize=9)
+    fig.savefig(output.with_name(output.name+'_rgb.png'),dpi=150);plt.close(fig)
     fig,axes=plt.subplots(2,4,figsize=(14,7),layout='constrained')
     for band,ax in enumerate(axes.flat):
         source(ax,band);ax.set_title(f'B{band}: observed input')
@@ -84,39 +92,13 @@ def render_record(image, record, output, title, gt_box=None, limits=None):
             outline=np.concatenate((polygon,polygon[:1]));ax.plot(*outline.T,color='#00ffff',linewidth=.7)
     fig.suptitle(title+'\nAnnotation contour is for identification only; band coordinates are not realigned.',fontsize=10)
     fig.savefig(output.with_name(output.name+'_bands.png'),dpi=130);plt.close(fig)
-    if 'candidate_points' not in record:
-        fig,axes=plt.subplots(1,2,figsize=(10,5),layout='constrained')
-        for ax in axes:source(ax)
-        axes[0].set_title('Observed B4');axes[1].set_title('Actual decoder attention samples')
-        values=np.asarray(record['attention_weights']).reshape(-1)
-        scatter=axes[1].scatter(*points.reshape(-1,2).T,c=values,s=18,vmin=0,vmax=1,cmap='viridis')
-        fig.colorbar(scatter,ax=axes[1]);fig.suptitle(title,fontsize=10)
-    else:
-        fig,axes=plt.subplots(2,3,figsize=(14,8),layout='constrained')
-        for ax in axes.flat:source(ax)
-        axes[0,0].set_title('Observed B4; same source coordinates')
-        w=record['background_weights'];selected=w>0
-        axes[0,1].scatter(*bg[~selected].T,marker='x',c='gray',s=10)
-        scatter=axes[0,1].scatter(*bg[selected].T,c=w[selected],vmin=0,vmax=1,cmap='viridis',s=18)
-        fig.colorbar(scatter,ax=axes[0,1]);axes[0,1].set_title('Background support and exclusion weights')
-        fields=[('semantic_attention','Semantic attention',axes[0,2]),
-                ('background_score','Background-relative score',axes[1,0]),
-                ('object_compatibility','Object compatibility',axes[1,1]),
-                ('aggregation_contribution','Actual aggregation contribution',axes[1,2])]
-        valid=np.asarray(record['candidate_valid']).astype(bool)
-        for key,label,ax in fields:
-            low,high=(-4,4) if key=='background_score' else (0,1)
-            values=record[key]
-            if key in ('semantic_attention','aggregation_contribution'):
-                # Fixed units relative to uniform 1/K allocation, shared by
-                # every image/epoch/mode. Never stretch each panel separately.
-                values=values*len(points);low,high=0,3
-                label+=f' × {len(points)}'
-            if limits and key in limits:low,high=limits[key]
-            scatter=ax.scatter(*points[valid].T,c=values[valid],s=22,vmin=low,vmax=high,
-                cmap='coolwarm' if low<0 else 'viridis',edgecolors='black',linewidths=.15)
-            fig.colorbar(scatter,ax=ax,extend='both' if low<0 else 'neither');ax.set_title(label)
-        fig.suptitle(title+'\nFixed scales: score [-4,4]; compatibility [0,1]; attention/contribution × K [0,3]. Raw values in NPZ.',fontsize=10)
+    fig,axes=plt.subplots(1,2,figsize=(10,5),layout='constrained')
+    for ax in axes:source(ax)
+    axes[0].set_title('Observed pseudo RGB')
+    axes[1].set_title('Decoder cross-attention samples')
+    values=np.asarray(record['attention_weights']).reshape(-1)
+    scatter=axes[1].scatter(*points.reshape(-1,2).T,c=values,s=18,vmin=0,vmax=1,cmap='viridis')
+    fig.colorbar(scatter,ax=axes[1]);fig.suptitle(title,fontsize=10)
     fig.savefig(output.with_name(output.name+'_mechanism.png'),dpi=130);plt.close(fig)
 
 
@@ -173,8 +155,7 @@ class SourceEvidenceRecorder:
             image,target=self.dataset[index];name=self.dataset.images[index].stem
             device_target={k:v.to(device) if torch.is_tensor(v) else v for k,v in target.items()}
             model.decoder.set_diagnostic_mode(True,capture_attention=index in gallery)
-            metadata=[{'valid_mask':device_target['valid_mask']}]
-            result=model(image[None].to(device),targets=metadata) if model.requires_image_context else model(image[None].to(device))
+            result=model(image[None].to(device))
             # GT is introduced only after forward, for stable object identity.
             matching=criterion.matcher(result,[device_target])['indices'][0]
             query_to_gt={int(q):int(g) for q,g in zip(*matching)}
@@ -189,10 +170,8 @@ class SourceEvidenceRecorder:
                 'pred_boxes_pixels':postprocessor.restore_boxes(result['pred_boxes'],[device_target])[0,selected].float().cpu().numpy()}
             truth=self.dataset.get_ground_truth(index)
             archive.update(gt_boxes_pixels=truth['boxes'].numpy(),gt_labels=truth['labels'].numpy())
-            extension=result.get('diagnostic_query_extensions')
-            if extension:
-                layer=extension['apply_layer']
-                archive.update({k:v[layer,0,selected].float().cpu().numpy() for k,v in extension.items() if torch.is_tensor(v)})
+            for key in ('diagnostic_layer_logits','diagnostic_layer_class_logits_before_lqe','diagnostic_layer_boxes'):
+                if key in result:archive[key]=result[key][:,0,selected].float().cpu().numpy().transpose(1,0,2)
             if index in gallery:
                 source_dir=self.root/'sources';source_dir.mkdir(exist_ok=True)
                 source_path=source_dir/f'{name}.npz'
@@ -216,12 +195,6 @@ class SourceEvidenceRecorder:
                 if gt>=0:
                     label=int(truth['labels'][gt])
                     item['matched_class_score']=float(result['pred_logits'][0,q,label].sigmoid())
-                if extension:
-                    item.update(gate_mean=float(archive['evidence_gate'][row].mean()),
-                        contribution_mass=float(archive['aggregation_contribution'][row].sum()),
-                        residual_norm=float(archive['residual_norm'][row]),
-                        effective_background_support=float(archive['effective_background_support'][row]),
-                        diagonal_fallback=bool(archive['diagonal_fallback'][row]))
                 summaries.append(item)
             for item in gallery.get(index,[]):
                 q=gt_to_query.get(item['gt_index'])
@@ -236,15 +209,15 @@ class SourceEvidenceRecorder:
                     canvas_gt=truth['boxes'][item['gt_index']].clone()
                     canvas_gt[:2]=canvas_gt[:2]*target['scale_factor']+target['padding'][:2]
                     canvas_gt[2:4]*=target['scale_factor'].mean()
-                    render_record(image.numpy(),record,directory/stem,title,canvas_gt.numpy())
+                    render_record(image.numpy(),record,directory/stem,title,canvas_gt.numpy(),
+                        display_bands=self.settings.get('pseudo_rgb_bands',(4,2,1)))
                 artifacts.append({**item,'query_index':q,'row':row,'archive':f'{name}.npz',
-                                  'bands':stem+'_bands.png','mechanism':stem+'_mechanism.png'})
+                                  'rgb':stem+'_rgb.png','bands':stem+'_bands.png','mechanism':stem+'_mechanism.png'})
             _write_json(directory/f'{name}.json',dict(image_name=name,image_id=index,
                 source_path=str(self.dataset.images[index]),source_sha256=hashlib.sha256(self.dataset.images[index].read_bytes()).hexdigest(),
                 canvas_hw=list(image.shape[-2:]),scale_factor=target['scale_factor'],padding=target['padding'],
                 box_normalization_size=target.get('box_normalization_size',target['size']),
-                method=extension.get('mode') if extension else 'baseline',
-                schema=extension.get('schema_version') if extension else 'decoder-attention-v1',
+                method='baseline', schema='decoder-attention-v1',
                 model_source=model_source,epoch=epoch,selection='all Hungarian matches plus top class-score queries; matching only after inference'))
         _write_json(directory/'population.json',summaries)
         _write_json(directory/'gallery.json',artifacts)
@@ -253,12 +226,12 @@ class SourceEvidenceRecorder:
         for item in artifacts:
             html.append(f'<h2>{item["class_name"]}: {item["image_name"]}, GT {item["gt_index"]}</h2>')
             if 'mechanism' in item:
-                html.extend(f'<a href="{item[key]}"><img loading="lazy" style="width:100%;max-width:1300px" src="{item[key]}"></a>' for key in ('bands','mechanism'))
+                html.extend(f'<a href="{item[key]}"><img loading="lazy" style="width:100%;max-width:1300px" src="{item[key]}"></a>' for key in ('rgb','bands','mechanism'))
             else:html.append('<p>Unmatched: no query assigned; retained as a failure.</p>')
         (directory/'index.html').write_text('\n'.join(html))
         _write_json(directory/'summary.json',dict(epoch=epoch,model_source=model_source,images=len(indices),
             query_records=sum(row['query_index'] is not None for row in summaries),
             unmatched_objects=sum(row['query_index'] is None for row in summaries),
             gallery_objects=len(artifacts),seconds=time.perf_counter()-started,
-            scope='fixed training subset mechanism observation; no validation AP or calibrated pixel truth'))
+            scope='fixed training subset prediction observation; no validation AP or calibrated pixel truth'))
         print(f'Source evidence {stage}: {len(indices)} images, {time.perf_counter()-started:.1f}s -> {directory}',flush=True)

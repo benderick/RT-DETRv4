@@ -68,6 +68,7 @@ diagnostics_source_evidence:
   query_topk: 20
   save_initial: True
   render: True
+  pseudo_rgb_bands: [4, 2, 1]
 train_dataloader:
   total_batch_size: 8
   drop_last: False
